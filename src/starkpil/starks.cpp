@@ -9,7 +9,6 @@ void Starks::genProof(void *pAddress, FRIProof &proof, Goldilocks::Element *publ
     Polinomial xDivXSubXi(NExtended, FIELD_EXTENSION);
     Polinomial xDivXSubWXi(NExtended, FIELD_EXTENSION);
     Polinomial challenges(NUM_CHALLENGES, FIELD_EXTENSION);
-    std::cout << "holaaaaaaaaaaa " << N << " " << NExtended << std::endl;
 
     CommitPols cmPols(pAddress, starkInfo.mapDeg.section[eSection::cm1_n]);
     Goldilocks::Element *mem = (Goldilocks::Element *)pAddress;
@@ -320,7 +319,7 @@ Polinomial *Starks::transposeH1H2Columns(void *pAddress, uint64_t &numCommited)
     Goldilocks::Element *buffpols0 = &mem[starkInfo.mapOffsets.section[eSection::exps_withq_2ns]];
     assert(starkInfo.mapSectionsN.section[eSection::q_2ns] * NExtended >= 3 * tot_pols0 * N);
 
-    //#pragma omp parallel for
+    // #pragma omp parallel for
     for (uint64_t i = 0; i < starkInfo.puCtx.size(); i++)
     {
         Polinomial fPol = starkInfo.getPolinomial(mem, starkInfo.exps_n[starkInfo.puCtx[i].fExpId]);
@@ -378,7 +377,7 @@ Polinomial *Starks::transposeZColumns(void *pAddress, uint64_t &numCommited)
         exit(1);
     }
 
-    //#pragma omp parallel for (better without)
+    // #pragma omp parallel for (better without)
     for (uint64_t i = 0; i < starkInfo.puCtx.size(); i++)
     {
         Polinomial pNum = starkInfo.getPolinomial(mem, starkInfo.exps_n[starkInfo.puCtx[i].numId]);
