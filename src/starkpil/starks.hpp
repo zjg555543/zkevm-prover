@@ -188,6 +188,8 @@ public:
     Polinomial *transposeZColumns(void *pAddress, uint64_t &numCommited);
     void transposeZRows(void *pAddress, uint64_t &numCommited, Polinomial *transPols);
     void evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomial &LpEv);
+    void evmap_(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomial &LpEv);
+    void evmap__(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomial &LpEv);
 };
 
 #endif // STARKS_H

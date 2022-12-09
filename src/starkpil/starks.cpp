@@ -9,6 +9,7 @@ void Starks::genProof(void *pAddress, FRIProof &proof, Goldilocks::Element *publ
     Polinomial xDivXSubXi(NExtended, FIELD_EXTENSION);
     Polinomial xDivXSubWXi(NExtended, FIELD_EXTENSION);
     Polinomial challenges(NUM_CHALLENGES, FIELD_EXTENSION);
+    std::cout << "holaaaaaaaaaaa " << N << " " << NExtended << std::endl;
 
     CommitPols cmPols(pAddress, starkInfo.mapDeg.section[eSection::cm1_n]);
     Goldilocks::Element *mem = (Goldilocks::Element *)pAddress;
@@ -248,7 +249,7 @@ void Starks::genProof(void *pAddress, FRIProof &proof, Goldilocks::Element *publ
     TimerStopAndLog(STARK_STEP_5_LEv_LpEv);
 
     TimerStart(STARK_STEP_5_EVMAP);
-    evmap(pAddress, evals, LEv, LpEv);
+    evmap__(pAddress, evals, LEv, LpEv);
     TimerStopAndLog(STARK_STEP_5_EVMAP);
     TimerStart(STARK_STEP_5_XDIVXSUB);
 
@@ -475,12 +476,14 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
      */
 
     u_int64_t size_eval = starkInfo.evMap.size();
+    std::cout << " Hola size_eval: " << size_eval << std::endl;
     u_int64_t *sorted_evMap = (u_int64_t *)malloc(5 * size_eval * sizeof(u_int64_t));
     u_int64_t counters[5] = {0, 0, 0, 0, 0};
 
     for (uint64_t i = 0; i < size_eval; i++)
     {
         EvMap ev = starkInfo.evMap[i];
+
         if (ev.type == EvMap::eType::_const)
         {
             sorted_evMap[counters[0]] = i;
@@ -524,6 +527,7 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
         }
     }
     // join subsets 1 and 2 in 1
+
     int offset1 = size_eval + counters[1];
     int offset2 = 2 * size_eval;
     for (uint64_t i = 0; i < counters[2]; ++i)
@@ -539,14 +543,13 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
         sorted_evMap[offset1 + i] = sorted_evMap[offset2 + i];
         ++counters[3];
     }
-    // Buffer for partial results of the matrix-vector product (columns distribution)
+    // Buffer for partial results of the matrix-vector product (columns distribution)  .
     int num_threads = omp_get_max_threads();
     Goldilocks::Element **evals_acc = (Goldilocks::Element **)malloc(num_threads * sizeof(Goldilocks::Element *));
     for (int i = 0; i < num_threads; ++i)
     {
         evals_acc[i] = (Goldilocks::Element *)malloc(size_eval * FIELD_EXTENSION * sizeof(Goldilocks::Element));
     }
-
 #pragma omp parallel
     {
         int thread_idx = omp_get_thread_num();
@@ -558,12 +561,12 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
 #pragma omp for
         for (uint64_t k = 0; k < N; k++)
         {
+            uint kpol = 0;
             for (uint64_t i = 0; i < counters[0]; i++)
             {
                 int indx = sorted_evMap[i];
                 EvMap ev = starkInfo.evMap[indx];
                 Polinomial tmp(1, FIELD_EXTENSION);
-                Polinomial acc(1, FIELD_EXTENSION);
 
                 Polinomial p(&((Goldilocks::Element *)pConstPols2ns->address())[ev.id], pConstPols2ns->degree(), 1, pConstPols2ns->numPols());
 
@@ -572,6 +575,7 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
                 {
                     evals_acc[thread_idx][indx * FIELD_EXTENSION + j] = evals_acc[thread_idx][indx * FIELD_EXTENSION + j] + tmp[0][j];
                 }
+                ++kpol;
             }
             for (uint64_t i = 0; i < counters[1]; i++)
             {
@@ -587,6 +591,7 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
                 {
                     evals_acc[thread_idx][indx * FIELD_EXTENSION + j] = evals_acc[thread_idx][indx * FIELD_EXTENSION + j] + tmp[0][j];
                 }
+                ++kpol;
             }
             for (uint64_t i = 0; i < counters[3]; i++)
             {
@@ -602,6 +607,7 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
                 {
                     evals_acc[thread_idx][indx * FIELD_EXTENSION + j] = evals_acc[thread_idx][indx * FIELD_EXTENSION + j] + tmp[0][j];
                 }
+                ++kpol;
             }
         }
 #pragma omp for
@@ -623,6 +629,330 @@ void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomia
         }
     }
     free(sorted_evMap);
+    for (int i = 0; i < num_threads; ++i)
+    {
+        free(evals_acc[i]);
+    }
+    free(evals_acc);
+}
+void Starks::evmap_(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomial &LpEv)
+{
+    double time0 = omp_get_wtime();
+    Goldilocks::Element *mem = (Goldilocks::Element *)pAddress;
+    uint64_t extendBits = starkInfo.starkStruct.nBitsExt - starkInfo.starkStruct.nBits;
+    /* sort polinomials depending on its type
+
+        Subsets:
+            0. const
+            1. cm , dim=1
+            2. qs , dim=1  //1 and 2 to be joined
+            3. cm , dim=3
+            4. qs, dim=3   //3 and 4 to be joined
+     */
+
+    u_int64_t size_eval = starkInfo.evMap.size();
+    std::cout << " Hola size_eval : " << size_eval << std::endl;
+    u_int64_t *sorted_evMap = (u_int64_t *)malloc(5 * size_eval * sizeof(u_int64_t));
+    u_int64_t counters[5] = {0, 0, 0, 0, 0};
+
+    Polinomial *ordPols = new Polinomial[size_eval];
+    vector<bool> isPrime(size_eval);
+    vector<uint64_t> indx(size_eval);
+
+    for (uint64_t i = 0; i < size_eval; i++)
+    {
+        EvMap ev = starkInfo.evMap[i];
+
+        if (ev.type == EvMap::eType::_const)
+        {
+            sorted_evMap[counters[0]] = i;
+            ordPols[counters[0]].potConstruct(&((Goldilocks::Element *)pConstPols2ns->address())[ev.id], pConstPols2ns->degree(), 1, pConstPols2ns->numPols());
+            isPrime[counters[0]] = ev.prime;
+            indx[counters[0]] = i;
+            ++counters[0];
+        }
+        else if (ev.type == EvMap::eType::cm)
+        {
+            uint16_t idPol = (ev.type == EvMap::eType::cm) ? starkInfo.cm_2ns[ev.id] : starkInfo.qs[ev.id];
+            VarPolMap polInfo = starkInfo.varPolMap[idPol];
+            uint64_t dim = polInfo.dim;
+            if (dim == 1)
+            {
+                sorted_evMap[size_eval + counters[1]] = i;
+                ++counters[1];
+            }
+            else
+            {
+                sorted_evMap[3 * size_eval + counters[3]] = i;
+                ++counters[3];
+            }
+        }
+        else if (ev.type == EvMap::eType::q)
+        {
+            uint16_t idPol = (ev.type == EvMap::eType::cm) ? starkInfo.cm_2ns[ev.id] : starkInfo.qs[ev.id];
+            VarPolMap polInfo = starkInfo.varPolMap[idPol];
+            uint64_t dim = polInfo.dim;
+            if (dim == 1)
+            {
+                sorted_evMap[2 * size_eval + counters[2]] = i;
+                ++counters[2];
+            }
+            else
+            {
+                sorted_evMap[4 * size_eval + counters[4]] = i;
+                ++counters[4];
+            }
+        }
+        else
+        {
+            throw std::invalid_argument("Invalid ev type: " + ev.type);
+        }
+    }
+    // join subsets 1 and 2 in 1
+    int offset_ = counters[0];
+    for (uint64_t i = 0; i < counters[1]; ++i)
+    {
+        EvMap ev = starkInfo.evMap[sorted_evMap[size_eval + i]];
+        if (ev.type == EvMap::eType::cm)
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.cm_2ns[ev.id]);
+        }
+        else
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.qs[ev.id]);
+        }
+        isPrime[offset_ + i] = ev.prime;
+        indx[offset_ + i] = sorted_evMap[size_eval + i];
+    }
+    offset_ += counters[1];
+    int offset1 = size_eval + counters[1];
+    int offset2 = 2 * size_eval;
+    for (uint64_t i = 0; i < counters[2]; ++i)
+    {
+        sorted_evMap[offset1 + i] = sorted_evMap[offset2 + i];
+        EvMap ev = starkInfo.evMap[sorted_evMap[2 * size_eval + i]];
+        if (ev.type == EvMap::eType::cm)
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.cm_2ns[ev.id]);
+        }
+        else
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.qs[ev.id]);
+        }
+        isPrime[offset_ + i] = ev.prime;
+        indx[offset_ + i] = sorted_evMap[2 * size_eval + i];
+
+        ++counters[1];
+    }
+    offset_ += counters[2];
+
+    // join subsets 3 and 4 in 3
+    for (uint64_t i = 0; i < counters[3]; ++i)
+    {
+        EvMap ev = starkInfo.evMap[sorted_evMap[3 * size_eval + i]];
+        if (ev.type == EvMap::eType::cm)
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.cm_2ns[ev.id]);
+        }
+        else
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.qs[ev.id]);
+        }
+        isPrime[offset_ + i] = ev.prime;
+        indx[offset_ + i] = sorted_evMap[3 * size_eval + i];
+    }
+    offset_ += counters[3];
+    offset1 = 3 * size_eval + counters[3];
+    offset2 = 4 * size_eval;
+    for (uint64_t i = 0; i < counters[4]; ++i)
+    {
+        sorted_evMap[offset1 + i] = sorted_evMap[offset2 + i];
+        ++counters[3];
+        EvMap ev = starkInfo.evMap[sorted_evMap[4 * size_eval + i]];
+        if (ev.type == EvMap::eType::cm)
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.cm_2ns[ev.id]);
+        }
+        else
+        {
+            ordPols[offset_ + i] = starkInfo.getPolinomial(mem, starkInfo.qs[ev.id]);
+        }
+        isPrime[offset_ + i] = ev.prime;
+        indx[offset_ + i] = sorted_evMap[4 * size_eval + i];
+    }
+    // Buffer for partial results of the matrix-vector product (columns distribution)  .
+    int num_threads = omp_get_max_threads();
+    Goldilocks::Element **evals_acc = (Goldilocks::Element **)malloc(num_threads * sizeof(Goldilocks::Element *));
+    for (int i = 0; i < num_threads; ++i)
+    {
+        evals_acc[i] = (Goldilocks::Element *)malloc(size_eval * FIELD_EXTENSION * sizeof(Goldilocks::Element));
+    }
+    double time1 = omp_get_wtime();
+    std::cout << "Time part one: " << time1 - time0 << std::endl;
+
+#pragma omp parallel
+    {
+        int thread_idx = omp_get_thread_num();
+        for (uint64_t i = 0; i < size_eval * FIELD_EXTENSION; ++i)
+        {
+            evals_acc[thread_idx][i] = Goldilocks::zero();
+        }
+
+#pragma omp for
+        for (uint64_t k = 0; k < N; k++)
+        {
+            Goldilocks::Element *LpEv_ = &(LpEv[k][0]);
+            Goldilocks::Element *LEv_ = &(LEv[k][0]);
+            for (uint64_t i = 0; i < size_eval; i++)
+            {
+                Polinomial::mulAddElement_adim3(&(evals_acc[thread_idx][indx[i] * FIELD_EXTENSION]), isPrime[i] ? LpEv_ : LEv_, ordPols[i], k << extendBits);
+            }
+        }
+
+#pragma omp for
+        for (uint64_t i = 0; i < size_eval; ++i)
+        {
+            Goldilocks::Element sum0 = Goldilocks::zero();
+            Goldilocks::Element sum1 = Goldilocks::zero();
+            Goldilocks::Element sum2 = Goldilocks::zero();
+            int offset = i * FIELD_EXTENSION;
+            for (int k = 0; k < num_threads; ++k)
+            {
+                sum0 = sum0 + evals_acc[k][offset];
+                sum1 = sum1 + evals_acc[k][offset + 1];
+                sum2 = sum2 + evals_acc[k][offset + 2];
+            }
+            (evals[i])[0] = sum0;
+            (evals[i])[1] = sum1;
+            (evals[i])[2] = sum2;
+        }
+    }
+    double time2 = omp_get_wtime();
+    std::cout << "Time tercera one: " << time2 - time1 << std::endl;
+
+    free(sorted_evMap);
+    for (int i = 0; i < num_threads; ++i)
+    {
+        free(evals_acc[i]);
+    }
+    free(evals_acc);
+    delete[] ordPols;
+}
+void Starks::evmap__(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomial &LpEv)
+{
+    Goldilocks::Element *mem = (Goldilocks::Element *)pAddress;
+    uint64_t extendBits = starkInfo.starkStruct.nBitsExt - starkInfo.starkStruct.nBits;
+    u_int64_t size_eval = starkInfo.evMap.size();
+
+    // Order polinomials by address, note that there are collisions!
+    map<uintptr_t, vector<uint>> map_offsets;
+
+    for (uint64_t i = 0; i < size_eval; i++)
+    {
+        EvMap ev = starkInfo.evMap[i];
+        if (ev.type == EvMap::eType::_const)
+        {
+            map_offsets[reinterpret_cast<std::uintptr_t>(&((Goldilocks::Element *)pConstPols2ns->address())[ev.id])].push_back(i);
+        }
+        else if (ev.type == EvMap::eType::cm)
+        {
+            Polinomial pol = starkInfo.getPolinomial(mem, starkInfo.cm_2ns[ev.id]);
+            map_offsets[reinterpret_cast<std::uintptr_t>(pol.address())].push_back(i);
+        }
+        else if (ev.type == EvMap::eType::q)
+        {
+            Polinomial pol = starkInfo.getPolinomial(mem, starkInfo.qs[ev.id]);
+            map_offsets[reinterpret_cast<std::uintptr_t>(pol.address())].push_back(i);
+        }
+        else
+        {
+            throw std::invalid_argument("Invalid ev type: " + ev.type);
+        }
+    }
+
+    Polinomial *ordPols = new Polinomial[size_eval];
+    vector<bool> isPrime(size_eval);
+    vector<uint> indx(size_eval);
+
+    //   build and store ordered polinomials that need to be computed
+    uint kk = 0;
+    for (std::map<uintptr_t, std::vector<uint>>::const_iterator it = map_offsets.begin(); it != map_offsets.end(); ++it)
+    {
+        for (std::vector<uint>::const_iterator it2 = it->second.begin(); it2 != it->second.end(); ++it2)
+        {
+            EvMap ev = starkInfo.evMap[*it2];
+            if (ev.type == EvMap::eType::_const)
+            {
+                ordPols[kk].potConstruct(&((Goldilocks::Element *)pConstPols2ns->address())[ev.id], pConstPols2ns->degree(), 1, pConstPols2ns->numPols());
+            }
+            else if (ev.type == EvMap::eType::cm)
+            {
+                ordPols[kk] = starkInfo.getPolinomial(mem, starkInfo.cm_2ns[ev.id]);
+            }
+            else if (ev.type == EvMap::eType::q)
+            {
+                ordPols[kk] = starkInfo.getPolinomial(mem, starkInfo.qs[ev.id]);
+            }
+            isPrime[kk] = ev.prime;
+            indx[kk] = *it2;
+            ++kk;
+        }
+    }
+    assert(kk == size_eval);
+    // Build buffer for partial results of the matrix-vector product (columns distribution)  .
+    int num_threads = omp_get_max_threads();
+    Goldilocks::Element **evals_acc = (Goldilocks::Element **)malloc(num_threads * sizeof(Goldilocks::Element *));
+    for (int i = 0; i < num_threads; ++i)
+    {
+        evals_acc[i] = (Goldilocks::Element *)malloc(size_eval * FIELD_EXTENSION * sizeof(Goldilocks::Element));
+    }
+
+#pragma omp parallel
+    {
+        int thread_idx = omp_get_thread_num();
+        for (uint64_t i = 0; i < size_eval * FIELD_EXTENSION; ++i)
+        {
+            evals_acc[thread_idx][i] = Goldilocks::zero();
+        }
+
+#pragma omp for
+        for (uint64_t k = 0; k < N; k++)
+        {
+            Goldilocks::Element *LpEv_ = &(LpEv[k][0]);
+            Goldilocks::Element *LEv_ = &(LEv[k][0]);
+            for (uint64_t i = 0; i < size_eval; i++)
+            {
+                Polinomial::mulAddElement_adim3(&(evals_acc[thread_idx][i * FIELD_EXTENSION]), isPrime[i] ? LpEv_ : LEv_, ordPols[i], k << extendBits);
+            }
+        }
+
+#pragma omp for
+        for (uint64_t i = 0; i < size_eval; ++i)
+        {
+            Goldilocks::Element sum0 = Goldilocks::zero();
+            Goldilocks::Element sum1 = Goldilocks::zero();
+            Goldilocks::Element sum2 = Goldilocks::zero();
+            int offset = i * FIELD_EXTENSION;
+            for (int k = 0; k < num_threads; ++k)
+            {
+                sum0 = sum0 + evals_acc[k][offset];
+                sum1 = sum1 + evals_acc[k][offset + 1];
+                sum2 = sum2 + evals_acc[k][offset + 2];
+            }
+            evals_acc[0][offset] = sum0;
+            evals_acc[0][offset + 1] = sum1;
+            evals_acc[0][offset + 2] = sum2;
+        }
+#pragma omp single
+        for (uint64_t i = 0; i < size_eval; ++i)
+        {
+            int offset = i * FIELD_EXTENSION;
+            (evals[indx[i]])[0] = evals_acc[0][offset];
+            (evals[indx[i]])[1] = evals_acc[0][offset + 1];
+            (evals[indx[i]])[2] = evals_acc[0][offset + 2];
+        }
+    }
+    delete[] ordPols;
     for (int i = 0; i < num_threads; ++i)
     {
         free(evals_acc[i]);
