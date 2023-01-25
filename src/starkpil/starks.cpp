@@ -1,5 +1,50 @@
 #include "starks.hpp"
 
+void step42ns_first_(Goldilocks3::Element &tmp_, Goldilocks::Element *pols, ConstantPolsStarks *pConstPols, ConstantPolsStarks *pConstPols2ns, Polinomial &challenges, Polinomial &x_n, Polinomial &x_2ns, ZhInv &zi, Polinomial &evals, Polinomial &xDivXSubXi, Polinomial &xDivXSubWXi, const Goldilocks::Element *publicInputs, uint64_t i)
+{
+
+    for (int j = 0; j < 800; ++j)
+    {
+        Goldilocks::Element tmp_1;
+        Goldilocks::mul(tmp_1, pols[j + i * 639], pols[j + ((i + 2) % 16777216) * 639]);
+        Goldilocks::Element tmp_2;
+        Goldilocks::mul(tmp_2, pols[j + 1 + i * 644], zi.zhInv(i));
+        Goldilocks::Element tmp_3;
+        Goldilocks::add(tmp_3, tmp_1, tmp_2);
+        Goldilocks::Element tmp_4;
+        Goldilocks::sub(tmp_4, tmp_1, tmp_2);
+        Goldilocks::sub(tmp_4, tmp_4, tmp_3);
+        Goldilocks::Element tmp_5;
+        Goldilocks::mul(tmp_5, tmp_3, tmp_4);
+        Goldilocks::Element tmp_6;
+        Goldilocks::mul(tmp_6, pols[j + 2 + i * 639], pols[j + ((i + 2) % 16777216) * 639]);
+        Goldilocks::Element tmp_7;
+        Goldilocks::mul(tmp_7, pols[j + 3 + i * 644], zi.zhInv(i));
+        Goldilocks::Element tmp_8;
+        Goldilocks::add(tmp_8, tmp_5, tmp_7);
+        Goldilocks::Element tmp_9;
+        Goldilocks::sub(tmp_9, tmp_5, tmp_6);
+        Goldilocks::Element tmp_10;
+        Goldilocks::mul(tmp_10, tmp_8, tmp_9);
+        Goldilocks::mul(pols[j + 4 + i * 644], tmp_10, tmp_9);
+        Goldilocks::add(pols[j + 5 + i * 644], tmp_10, tmp_9);
+        Goldilocks::sub(pols[j + 5 + i * 644], tmp_10, tmp_9);
+        Goldilocks::add(pols[j + 6 + i * 644], pols[j + 5 + i * 644], tmp_9);
+
+        Goldilocks3::Element tmp_11;
+        Goldilocks3::add(tmp_11, Goldilocks::fromU64(1ULL), tmp_);
+        Goldilocks3::mul(tmp_11, (Goldilocks3::Element &)*challenges[1], tmp_);
+        Goldilocks3::Element tmp_12;
+        Goldilocks3::add(tmp_12, (Goldilocks3::Element &)*challenges[3], tmp_11);
+        Goldilocks3::Element tmp_13;
+        Goldilocks3::mul(tmp_13, (Goldilocks3::Element &)*challenges[0], tmp_12);
+        Goldilocks3::add(tmp_12, tmp_12, tmp_13);
+        Goldilocks3::Element tmp_14;
+        Goldilocks3::mul(tmp_14, tmp_13, tmp_12);
+        Goldilocks3::add(tmp_, Goldilocks::fromU64(1ULL), tmp_14);
+    }
+}
+
 void Starks::genProof(FRIProof &proof, Goldilocks::Element *publicInputs, Steps *steps)
 {
     // Initialize vars
@@ -36,6 +81,24 @@ void Starks::genProof(FRIProof &proof, Goldilocks::Element *publicInputs, Steps 
         f_2ns : p_f_2ns
     };
     TimerStopAndLog(STARK_INITIALIZATION);
+#if 0
+    TimerStart(STARK_STEP_4_CALCULATE_EXPS_2NS_);
+    Goldilocks3::Element *tmp_ = new Goldilocks3::Element[100000];
+#pragma omp parallel for
+    for (uint64_t i = 0; i < N; i++)
+    {
+        int id = omp_get_thread_num() * 1024;
+        int id2 = omp_get_thread_num() * 128;
+        //  step42ns_first_(tmp_[id2], mem, pConstPols, pConstPols2ns, challenges, x_n, x_2ns, zi, evals, xDivXSubXi, xDivXSubWXi, &publicInputs[0], is);
+        //steps->step42ns_first(mem, pConstPols, pConstPols2ns, challenges, x_n, x_2ns, zi, evals, xDivXSubXi, xDivXSubWXi, &publicInputs[0], i);
+        steps->step52ns_first(params, i);
+
+    }
+    TimerStopAndLog(STARK_STEP_4_CALCULATE_EXPS_2NS_);
+    std::cout << tmp_[0][0].fe << std::endl;
+    exit(0);
+#endif
+
     //--------------------------------
     // 1.- Calculate p_cm1_2ns
     //--------------------------------
@@ -84,7 +147,7 @@ void Starks::genProof(FRIProof &proof, Goldilocks::Element *publicInputs, Steps 
         nthreads += 1;
     }
     uint64_t buffSize = 8 * starkInfo.puCtx.size() * N;
-    assert(buffSize<=starkInfo.mapSectionsN.section[eSection::cm3_2ns] * NExtended);
+    assert(buffSize <= starkInfo.mapSectionsN.section[eSection::cm3_2ns] * NExtended);
     uint64_t *mam = (uint64_t *)pAddress;
     uint64_t *pbufferH = &mam[starkInfo.mapOffsets.section[eSection::cm3_2ns]];
     uint64_t buffSizeThread = buffSize / nthreads;
@@ -208,7 +271,7 @@ void Starks::genProof(FRIProof &proof, Goldilocks::Element *publicInputs, Steps 
     TimerStart(STARK_STEP_4_CALCULATE_EXPS_2NS_INTT);
     nttExtended.INTT(qq1.address(), p_q_2ns, NExtended, starkInfo.qDim, NULL, 2, 1);
     TimerStopAndLog(STARK_STEP_4_CALCULATE_EXPS_2NS_INTT);
-    
+
     Goldilocks::Element shiftIn = Goldilocks::exp(Goldilocks::inv(Goldilocks::shift()), N);
 
     TimerStart(STARK_STEP_4_CALCULATE_EXPS_2NS_MUL);
@@ -320,10 +383,10 @@ void Starks::genProof(FRIProof &proof, Goldilocks::Element *publicInputs, Steps 
     TimerStopAndLog(STARK_STEP_5_XDIVXSUB);
     TimerStart(STARK_STEP_5_CALCULATE_EXPS);
 
-#pragma omp parallel for
-    for (uint64_t i = 0; i < NExtended; i++)
+#pragma omp parallel for schedule(static)
+    for (uint64_t i = 0; i < NExtended / nrows_; i++)
     {
-        steps->step52ns_first(params, i);
+        steps->step52ns_first(params, i * nrows_);
     }
 
     TimerStopAndLog(STARK_STEP_5_CALCULATE_EXPS);
@@ -489,7 +552,7 @@ void Starks::transposeZRows(void *pAddress, uint64_t &numCommited, Polinomial *t
     }
     if (numpols > 0)
     {
-        delete [] transPols;
+        delete[] transPols;
     }
 }
 void Starks::evmap(void *pAddress, Polinomial &evals, Polinomial &LEv, Polinomial &LpEv)

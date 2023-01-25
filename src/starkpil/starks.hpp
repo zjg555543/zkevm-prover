@@ -29,6 +29,7 @@ class Starks
 public:
     const Config &config;
     StarkInfo starkInfo;
+    uint64_t nrows_;
 
 private:
     void *pConstPolsAddress;
@@ -78,6 +79,7 @@ public:
                                                                            pAddress(_pAddress)
 
     {
+        nrows_ = 1;
         // Avoid unnecessary initialization if we are not going to generate any proof
         if (!config.generateProof())
             return;

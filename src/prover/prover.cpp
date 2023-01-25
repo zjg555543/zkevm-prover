@@ -30,6 +30,8 @@
 #include "recursive1Steps.hpp"
 #include "recursive2Steps.hpp"
 
+#define NROWS_ 4
+
 Prover::Prover(Goldilocks &fr,
                PoseidonGoldilocks &poseidon,
                const Config &config) : fr(fr),
@@ -114,6 +116,7 @@ Prover::Prover(Goldilocks &fr,
     }
 
     starkZkevm = new Starks(config, {config.zkevmConstPols, config.mapConstPolsFile, config.zkevmConstantsTree, config.zkevmStarkInfo}, pAddress);
+    starkZkevm->nrows_ = NROWS_;
     starksC12a = new Starks(config, {config.c12aConstPols, config.mapConstPolsFile, config.c12aConstantsTree, config.c12aStarkInfo}, pAddress);
     starksRecursive1 = new Starks(config, {config.recursive1ConstPols, config.mapConstPolsFile, config.recursive1ConstantsTree, config.recursive1StarkInfo}, pAddress);
     starksRecursive2 = new Starks(config, {config.recursive2ConstPols, config.mapConstPolsFile, config.recursive2ConstantsTree, config.recursive2StarkInfo}, pAddress);
@@ -125,7 +128,7 @@ Prover::~Prover()
     // · delete groth16Prover;
     mpz_clear(altBbn128r);
 
-    uint64_t polsSize = starkZkevm->starkInfo.mapTotalN * sizeof(Goldilocks::Element)+ starkZkevm->starkInfo.mapSectionsN.section[eSection::cm1_n] * (1 << starkZkevm->starkInfo.starkStruct.nBits) * FIELD_EXTENSION * sizeof(Goldilocks::Element);
+    uint64_t polsSize = starkZkevm->starkInfo.mapTotalN * sizeof(Goldilocks::Element) + starkZkevm->starkInfo.mapSectionsN.section[eSection::cm1_n] * (1 << starkZkevm->starkInfo.starkStruct.nBits) * FIELD_EXTENSION * sizeof(Goldilocks::Element);
 
     // Unmap committed polynomials address
     if (config.zkevmCmPols.size() > 0)
