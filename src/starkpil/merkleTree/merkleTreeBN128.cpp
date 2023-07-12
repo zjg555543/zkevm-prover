@@ -128,8 +128,7 @@ void MerkleTreeBN128::linearHash()
                 }
                 else
                 {
-                    std::vector<RawFr::Element> elements_last(MT_BN128_ARITY + 1);
-                    std::memset(&elements_last[pending + 1], 0, (MT_BN128_ARITY - pending - 1) * sizeof(RawFr::Element));
+                    std::vector<RawFr::Element> elements_last(pending + 1);
                     std::memcpy(&elements_last[1], &buff[i * width + width - pending], pending * sizeof(RawFr::Element));
                     std::memcpy(&elements_last[0], &nodes[i], sizeof(RawFr::Element));
                     p.hash(elements_last, &nodes[i]);
@@ -161,7 +160,7 @@ void MerkleTreeBN128::merkelize()
     RawFr::Element *cursor = &nodes[0];
     uint64_t n256 = height;
     uint64_t nextN256 = floor((double)(n256 - 1) / MT_BN128_ARITY) + 1;
-    RawFr::Element *cursorNext = &nodes[n256];
+    RawFr::Element *cursorNext = &nodes[nextN256 * MT_BN128_ARITY];
     while (n256 > 1)
     {
         uint64_t batches = ceil((double)n256 / MT_BN128_ARITY);
@@ -171,8 +170,7 @@ void MerkleTreeBN128::merkelize()
             Poseidon_opt p;
             vector<RawFr::Element> elements(MT_BN128_ARITY + 1);
             std::memset(&elements[0], 0, (MT_BN128_ARITY + 1) * sizeof(RawFr::Element));
-            uint numHashes = MT_BN128_ARITY;
-            (batches == 1) ? numHashes = n256 : numHashes = MT_BN128_ARITY;
+            uint numHashes = (i == batches - 1) ? n256 - i*MT_BN128_ARITY : MT_BN128_ARITY;
             std::memcpy(&elements[1], &cursor[i * MT_BN128_ARITY], numHashes * sizeof(RawFr::Element));
             p.hash(elements, &cursorNext[i]);
         }
@@ -180,7 +178,7 @@ void MerkleTreeBN128::merkelize()
         n256 = nextN256;
         nextN256 = floor((double)(n256 - 1) / MT_BN128_ARITY) + 1;
         cursor = cursorNext;
-        cursorNext = &cursor[std::max(n256, (uint64_t)MT_BN128_ARITY)];
+        cursorNext = &cursor[nextN256 * MT_BN128_ARITY];
     }
 }
 
