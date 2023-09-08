@@ -28,17 +28,15 @@ string Database::dbStateRootKey("fffffffffffffffffffffffffffffffffffffffffffffff
 Goldilocks::Element Database::dbStateRootvKey[4] = {0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF, 0xFFFFFFFFFFFFFFFF};
 bool Database::useAssociativeCache = false;
 
-
 #endif
 
 // Helper functions
-string removeBSXIfExists(string s) {return ((s.at(0) == '\\') && (s.at(1) == 'x')) ? s.substr(2) : s;}
+string removeBSXIfExists(string s) { return ((s.at(0) == '\\') && (s.at(1) == 'x')) ? s.substr(2) : s; }
 
-Database::Database (Goldilocks &fr, const Config &config) :
-        fr(fr),
-        config(config),
-        connectionsPool(NULL),
-        multiWrite(fr)
+Database::Database(Goldilocks &fr, const Config &config) : fr(fr),
+                                                           config(config),
+                                                           connectionsPool(NULL),
+                                                           multiWrite(fr)
 {
     // Init mutex
     pthread_mutex_init(&connMutex, NULL);
@@ -54,11 +52,11 @@ Database::~Database()
     {
         if (connectionsPool != NULL)
         {
-            for (uint64_t i=0; i<config.dbNumberOfPoolConnections; i++)
+            for (uint64_t i = 0; i < config.dbNumberOfPoolConnections; i++)
             {
                 if (connectionsPool[i].pConnection != NULL)
                 {
-                    //zklog.info("Database::~Database() deleting writeConnectionsPool[" + to_string(i) + "].pConnection=" + to_string((uint64_t)writeConnectionsPool[i].pConnection));
+                    // zklog.info("Database::~Database() deleting writeConnectionsPool[" + to_string(i) + "].pConnection=" + to_string((uint64_t)writeConnectionsPool[i].pConnection));
                     delete[] connectionsPool[i].pConnection;
                 }
             }
@@ -94,7 +92,6 @@ void Database::init(void)
         if (config.dbCacheSynchURL.size() > 0)
         {
             pthread_create(&cacheSynchPthread, NULL, dbCacheSynchThread, this);
-
         }
 
         initRemote();
@@ -109,8 +106,9 @@ void Database::init(void)
     bInitialized = true;
 }
 
-zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vector<Goldilocks::Element> &value, DatabaseMap *dbReadLog, const bool update,  bool *keys, uint64_t level)
+zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vector<Goldilocks::Element> &value, DatabaseMap *dbReadLog, const bool update, bool *keys, uint64_t level)
 {
+    TimerStart(DATABASE_READ);
     // Check that it has been initialized before
     if (!bInitialized)
     {
@@ -119,7 +117,8 @@ zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vect
     }
 
     struct timeval t;
-    if (dbReadLog != NULL) gettimeofday(&t, NULL);
+    if (dbReadLog != NULL)
+        gettimeofday(&t, NULL);
 
     zkresult r = ZKR_UNSPECIFIED;
 
@@ -129,93 +128,106 @@ zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vect
 
 #ifdef DATABASE_USE_CACHE
     // If the key is found in local database (cached) simply return it
-    if(usingAssociativeCache() && dbMTACache.findKey(vkey,value)){
+    if (usingAssociativeCache() && dbMTACache.findKey(vkey, value))
+    {
 
-        if (dbReadLog != NULL) dbReadLog->add(key, value, true, TimeDiff(t));
+        if (dbReadLog != NULL)
+            dbReadLog->add(key, value, true, TimeDiff(t));
         r = ZKR_SUCCESS;
+    }
+    else if (dbMTCache.enabled() && dbMTCache.find(key, value))
+    {
 
-    } else if( dbMTCache.enabled() && dbMTCache.find(key, value)){
-        
-        if (dbReadLog != NULL) dbReadLog->add(key, value, true, TimeDiff(t));
+        if (dbReadLog != NULL)
+            dbReadLog->add(key, value, true, TimeDiff(t));
         r = ZKR_SUCCESS;
     }
     else
 #endif
-    // If the key is pending to be stored in database, but already deleted from cache
-    if (config.dbMultiWrite && multiWrite.findNode(key, value))
-    {
-        // Add to the read log
-        if (dbReadLog != NULL) dbReadLog->add(key, value, true, TimeDiff(t));
+        // If the key is pending to be stored in database, but already deleted from cache
+        if (config.dbMultiWrite && multiWrite.findNode(key, value))
+        {
+            // Add to the read log
+            if (dbReadLog != NULL)
+                dbReadLog->add(key, value, true, TimeDiff(t));
 
 #ifdef DATABASE_USE_CACHE
-        // Store it locally to avoid any future remote access for this key
-        if(usingAssociativeCache()){
-            dbMTACache.addKeyValue(vkey, value, false);
-        }
-        else if(dbMTCache.enabled()){                
-            dbMTCache.add(key, value, false);
-        }
-#endif
-        r = ZKR_SUCCESS;
-    }
-    // If get tree is configured, read the tree from the branch (key hash) to the leaf (keys since level)
-    else if (config.dbGetTree && (keys != NULL))
-    {
-        // Get the tree
-        uint64_t numberOfFields;
-        r = readTreeRemote(key, keys, level, numberOfFields);
-
-        // Add to the read log, and restart the timer
-        if (dbReadLog != NULL)
-        {
-            dbReadLog->addGetTree(TimeDiff(t), numberOfFields);
-            gettimeofday(&t, NULL);
-        }
-
-        // Retry if failed, since read-only databases have a synchronization latency
-        if ( (r != ZKR_SUCCESS) && (config.dbReadRetryDelay > 0) )
-        {
-            for (uint64_t i=0; i<config.dbReadRetryCounter; i++)
+            // Store it locally to avoid any future remote access for this key
+            if (usingAssociativeCache())
             {
-                zklog.warning("Database::read() failed calling readTreeRemote() with error=" + zkresult2string(r) + "; will retry after " + to_string(config.dbReadRetryDelay) + "us key=" + key);
-
-                // Retry after dbReadRetryDelay us
-                usleep(config.dbReadRetryDelay);
-                r = readTreeRemote(key, keys, level, numberOfFields);
-
-                // Add to the read log, and restart the timer
-                if (dbReadLog != NULL)
-                {
-                    dbReadLog->addGetTree(TimeDiff(t), numberOfFields);
-                    gettimeofday(&t, NULL);
-                }
-
-                if (r == ZKR_SUCCESS)
-                {
-                    break;
-                }
-                zklog.warning("Database::read() retried readTreeRemote() after dbReadRetryDelay=" + to_string(config.dbReadRetryDelay) + "us and failed with error=" + zkresult2string(r) + " i=" + to_string(i));
+                dbMTACache.addKeyValue(vkey, value, false);
             }
+            else if (dbMTCache.enabled())
+            {
+                dbMTCache.add(key, value, false);
+            }
+#endif
+            r = ZKR_SUCCESS;
         }
-
-        // If succeeded, now the value should be present in the cache
-        if ( r == ZKR_SUCCESS)
+        // If get tree is configured, read the tree from the branch (key hash) to the leaf (keys since level)
+        else if (config.dbGetTree && (keys != NULL))
         {
-            if (usingAssociativeCache() && dbMTACache.findKey(vkey,value)){
-                if (dbReadLog != NULL) dbReadLog->add(key, value, true, TimeDiff(t));
-                r = ZKR_SUCCESS;
-            }else if(dbMTCache.enabled() && dbMTCache.find(key, value)){
-                if (dbReadLog != NULL) dbReadLog->add(key, value, true, TimeDiff(t));
-                r = ZKR_SUCCESS;                
+            // Get the tree
+            uint64_t numberOfFields;
+            r = readTreeRemote(key, keys, level, numberOfFields);
+
+            // Add to the read log, and restart the timer
+            if (dbReadLog != NULL)
+            {
+                dbReadLog->addGetTree(TimeDiff(t), numberOfFields);
+                gettimeofday(&t, NULL);
+            }
+
+            // Retry if failed, since read-only databases have a synchronization latency
+            if ((r != ZKR_SUCCESS) && (config.dbReadRetryDelay > 0))
+            {
+                for (uint64_t i = 0; i < config.dbReadRetryCounter; i++)
+                {
+                    zklog.warning("Database::read() failed calling readTreeRemote() with error=" + zkresult2string(r) + "; will retry after " + to_string(config.dbReadRetryDelay) + "us key=" + key);
+
+                    // Retry after dbReadRetryDelay us
+                    usleep(config.dbReadRetryDelay);
+                    r = readTreeRemote(key, keys, level, numberOfFields);
+
+                    // Add to the read log, and restart the timer
+                    if (dbReadLog != NULL)
+                    {
+                        dbReadLog->addGetTree(TimeDiff(t), numberOfFields);
+                        gettimeofday(&t, NULL);
+                    }
+
+                    if (r == ZKR_SUCCESS)
+                    {
+                        break;
+                    }
+                    zklog.warning("Database::read() retried readTreeRemote() after dbReadRetryDelay=" + to_string(config.dbReadRetryDelay) + "us and failed with error=" + zkresult2string(r) + " i=" + to_string(i));
+                }
+            }
+
+            // If succeeded, now the value should be present in the cache
+            if (r == ZKR_SUCCESS)
+            {
+                if (usingAssociativeCache() && dbMTACache.findKey(vkey, value))
+                {
+                    if (dbReadLog != NULL)
+                        dbReadLog->add(key, value, true, TimeDiff(t));
+                    r = ZKR_SUCCESS;
+                }
+                else if (dbMTCache.enabled() && dbMTCache.find(key, value))
+                {
+                    if (dbReadLog != NULL)
+                        dbReadLog->add(key, value, true, TimeDiff(t));
+                    r = ZKR_SUCCESS;
+                }
+                else
+                {
+                    zklog.warning("Database::read() called readTreeRemote() but key=" + key + " is not present");
+                    r = ZKR_UNSPECIFIED;
+                }
             }
             else
-            {
-                zklog.warning("Database::read() called readTreeRemote() but key=" + key + " is not present");
                 r = ZKR_UNSPECIFIED;
-            }
         }
-        else r = ZKR_UNSPECIFIED;
-    }
     if (useRemoteDB && (r == ZKR_UNSPECIFIED))
     {
         // If multi write is enabled, flush pending data, since some previously written keys
@@ -228,9 +240,9 @@ zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vect
         // Otherwise, read it remotelly, up to two times
         string sData;
         r = readRemote(false, key, sData);
-        if ( (r != ZKR_SUCCESS) && (config.dbReadRetryDelay > 0) )
+        if ((r != ZKR_SUCCESS) && (config.dbReadRetryDelay > 0))
         {
-            for (uint64_t i=0; i<config.dbReadRetryCounter; i++)
+            for (uint64_t i = 0; i < config.dbReadRetryCounter; i++)
             {
                 zklog.warning("Database::read() failed calling readRemote() with error=" + zkresult2string(r) + "; will retry after " + to_string(config.dbReadRetryDelay) + "us key=" + key + " i=" + to_string(i));
 
@@ -250,15 +262,19 @@ zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vect
 
 #ifdef DATABASE_USE_CACHE
             // Store it locally to avoid any future remote access for this key
-            if(usingAssociativeCache()){
+            if (usingAssociativeCache())
+            {
                 dbMTACache.addKeyValue(vkey, value, update);
-            }else if (dbMTCache.enabled()){
+            }
+            else if (dbMTCache.enabled())
+            {
                 dbMTCache.add(key, value, update);
             }
 #endif
 
             // Add to the read log
-            if (dbReadLog != NULL) dbReadLog->add(key, value, false, TimeDiff(t));
+            if (dbReadLog != NULL)
+                dbReadLog->add(key, value, false, TimeDiff(t));
         }
     }
 
@@ -281,12 +297,13 @@ zkresult Database::read(const string &_key, Goldilocks::Element (&vkey)[4], vect
         zklog.info(s);
     }
 #endif
-
+    TimerStopAndLog(DATABASE_READ);
     return r;
 }
 
-zkresult Database::write(const string &_key, const Goldilocks::Element* vkey, const vector<Goldilocks::Element> &value, const bool persistent)
+zkresult Database::write(const string &_key, const Goldilocks::Element *vkey, const vector<Goldilocks::Element> &value, const bool persistent)
 {
+    TimerStart(DATABASE_WRITE);
     // Check that it has  been initialized before
     if (!bInitialized)
     {
@@ -306,11 +323,11 @@ zkresult Database::write(const string &_key, const Goldilocks::Element* vkey, co
     string key = NormalizeToNFormat(_key, 64);
     key = stringToLower(key);
 
-    if ( useRemoteDB
+    if (useRemoteDB
 #ifdef DATABASE_USE_CACHE
-         && persistent
+        && persistent
 #endif
-         )
+    )
     {
         // Prepare the query
         string valueString = "";
@@ -330,18 +347,24 @@ zkresult Database::write(const string &_key, const Goldilocks::Element* vkey, co
 #ifdef DATABASE_USE_CACHE
     if ((r == ZKR_SUCCESS) && (dbMTCache.enabled() || dbMTACache.enabled()))
     {
-        if(usingAssociativeCache()){
+        if (usingAssociativeCache())
+        {
             Goldilocks::Element vkeyf[4];
-            if(vkey == NULL){
+            if (vkey == NULL)
+            {
                 string2key(fr, _key, vkeyf);
-            }else{
+            }
+            else
+            {
                 vkeyf[0] = vkey[0];
                 vkeyf[1] = vkey[1];
                 vkeyf[2] = vkey[2];
                 vkeyf[3] = vkey[3];
             }
             dbMTACache.addKeyValue(vkeyf, value, false);
-        }else{
+        }
+        else
+        {
             dbMTCache.add(key, value, false);
         }
     }
@@ -360,7 +383,7 @@ zkresult Database::write(const string &_key, const Goldilocks::Element* vkey, co
         zklog.info(s);
     }
 #endif
-
+    TimerStopAndLog(DATABASE_WRITE);
     return r;
 }
 
@@ -372,7 +395,7 @@ void Database::initRemote(void)
     {
         // Build the remote database URI
         string uri = config.databaseURL;
-        //zklog.info("Database URI: " + uri);
+        // zklog.info("Database URI: " + uri);
 
         // Create the database connections
         connLock();
@@ -385,17 +408,17 @@ void Database::initRemote(void)
                 zklog.error("Database::initRemote() found config.dbNumberOfPoolConnections=" + to_string(config.dbNumberOfPoolConnections));
                 exitProcess();
             }
-            if ( config.runHashDBServer && ((config.maxHashDBThreads + 1) > config.dbNumberOfPoolConnections) )
+            if (config.runHashDBServer && ((config.maxHashDBThreads + 1) > config.dbNumberOfPoolConnections))
             {
                 zklog.error("Database::initRemote() found config.maxHashDBThreads + 1=" + to_string(config.maxHashDBThreads + 1) + " > config.dbNumberOfPoolConnections=" + to_string(config.dbNumberOfPoolConnections));
                 exitProcess();
             }
-            if ( config.runExecutorServer && ((config.maxExecutorThreads + 1) > config.dbNumberOfPoolConnections) )
+            if (config.runExecutorServer && ((config.maxExecutorThreads + 1) > config.dbNumberOfPoolConnections))
             {
                 zklog.error("Database::initRemote() found config.maxExecutorThreads + 1=" + to_string(config.maxExecutorThreads + 1) + " > config.dbNumberOfPoolConnections=" + to_string(config.dbNumberOfPoolConnections));
                 exitProcess();
             }
-            if ( config.runHashDBServer && config.runExecutorServer && ((config.maxHashDBThreads + config.maxExecutorThreads + 1) > config.dbNumberOfPoolConnections) )
+            if (config.runHashDBServer && config.runExecutorServer && ((config.maxHashDBThreads + config.maxExecutorThreads + 1) > config.dbNumberOfPoolConnections))
             {
                 zklog.error("Database::initRemote() found config.maxHashDBThreads + config.maxExecutorThreads + 1=" + to_string(config.maxHashDBThreads + config.maxExecutorThreads + 1) + " > config.dbNumberOfPoolConnections=" + to_string(config.dbNumberOfPoolConnections));
                 exitProcess();
@@ -410,7 +433,7 @@ void Database::initRemote(void)
             }
 
             // Create write connections
-            for (uint64_t i=0; i<config.dbNumberOfPoolConnections; i++)
+            for (uint64_t i = 0; i < config.dbNumberOfPoolConnections; i++)
             {
                 connectionsPool[i].pConnection = new pqxx::connection{uri};
                 if (connectionsPool[i].pConnection == NULL)
@@ -419,7 +442,7 @@ void Database::initRemote(void)
                     exitProcess();
                 }
                 connectionsPool[i].bInUse = false;
-                //zklog.info("Database::initRemote() created write connection i=" + to_string(i) + " connectionsPool[i]=" + to_string((uint64_t)connectionsPool[i].pConnection));
+                // zklog.info("Database::initRemote() created write connection i=" + to_string(i) + " connectionsPool[i]=" + to_string((uint64_t)connectionsPool[i].pConnection));
             }
 
             // Reset counters
@@ -436,7 +459,7 @@ void Database::initRemote(void)
             }
             connection.bInUse = false;
         }
-        
+
         connUnlock();
     }
     catch (const std::exception &e)
@@ -460,23 +483,24 @@ void Database::initRemote(void)
     TimerStopAndLog(DB_INIT_REMOTE);
 }
 
-DatabaseConnection * Database::getConnection (void)
+DatabaseConnection *Database::getConnection(void)
 {
     if (config.dbConnectionsPool)
     {
         connLock();
-        DatabaseConnection * pConnection = NULL;
-        uint64_t i=0;
-        for (i=0; i<config.dbNumberOfPoolConnections; i++)
+        DatabaseConnection *pConnection = NULL;
+        uint64_t i = 0;
+        for (i = 0; i < config.dbNumberOfPoolConnections; i++)
         {
-            if (!connectionsPool[nextConnection].bInUse) break;
+            if (!connectionsPool[nextConnection].bInUse)
+                break;
             nextConnection++;
             if (nextConnection == config.dbNumberOfPoolConnections)
             {
                 nextConnection = 0;
             }
         }
-        if (i==config.dbNumberOfPoolConnections)
+        if (i == config.dbNumberOfPoolConnections)
         {
             zklog.error("Database::getWriteConnection() run out of free connections");
             exitProcess();
@@ -496,7 +520,7 @@ DatabaseConnection * Database::getConnection (void)
             pConnection->pConnection->disconnect();
             pConnection->bDisconnect = false;
         }
-        //zklog.info("Database::getWriteConnection() pConnection=" + to_string((uint64_t)pConnection) + " nextConnection=" + to_string(nextConnection) + " usedConnections=" + to_string(usedConnections));
+        // zklog.info("Database::getWriteConnection() pConnection=" + to_string((uint64_t)pConnection) + " nextConnection=" + to_string(nextConnection) + " usedConnections=" + to_string(usedConnections));
         connUnlock();
         return pConnection;
     }
@@ -511,7 +535,7 @@ DatabaseConnection * Database::getConnection (void)
     }
 }
 
-void Database::disposeConnection (DatabaseConnection * pConnection)
+void Database::disposeConnection(DatabaseConnection *pConnection)
 {
     if (config.dbConnectionsPool)
     {
@@ -520,7 +544,7 @@ void Database::disposeConnection (DatabaseConnection * pConnection)
         pConnection->bInUse = false;
         zkassert(usedConnections > 0);
         usedConnections--;
-        //zklog.info("Database::disposeWriteConnection() pConnection=" + to_string((uint64_t)pConnection) + " nextConnection=" + to_string(nextConnection) + " usedConnections=" + to_string(usedConnections));
+        // zklog.info("Database::disposeWriteConnection() pConnection=" + to_string((uint64_t)pConnection) + " nextConnection=" + to_string(nextConnection) + " usedConnections=" + to_string(usedConnections));
         connUnlock();
     }
     else
@@ -534,11 +558,11 @@ void Database::disposeConnection (DatabaseConnection * pConnection)
     }
 }
 
-void Database::queryFailed (void)
+void Database::queryFailed(void)
 {
     connLock();
 
-    for (uint64_t i=0; i<config.dbNumberOfPoolConnections; i++)
+    for (uint64_t i = 0; i < config.dbNumberOfPoolConnections; i++)
     {
         connectionsPool[i].bDisconnect = true;
     }
@@ -548,6 +572,7 @@ void Database::queryFailed (void)
 
 zkresult Database::readRemote(bool bProgram, const string &key, string &value)
 {
+    TimerStart(DATABASE_READ_REMOTE);
     const string &tableName = (bProgram ? config.dbProgramTableName : config.dbNodesTableName);
 
     if (config.logRemoteDbReads)
@@ -556,7 +581,7 @@ zkresult Database::readRemote(bool bProgram, const string &key, string &value)
     }
 
     // Get a free read db connection
-    DatabaseConnection * pDatabaseConnection = getConnection();
+    DatabaseConnection *pDatabaseConnection = getConnection();
 
     try
     {
@@ -602,15 +627,16 @@ zkresult Database::readRemote(bool bProgram, const string &key, string &value)
         disposeConnection(pDatabaseConnection);
         return ZKR_DB_ERROR;
     }
-    
+
     // Dispose the read db conneciton
     disposeConnection(pDatabaseConnection);
-
+    TimerStopAndLog(DATABASE_READ_REMOTE);
     return ZKR_SUCCESS;
 }
 
 zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level, uint64_t &numberOfFields)
 {
+    TimerStart(DATABASE_READ_TREE_REOMTE);
     zkassert(keys != NULL);
 
     if (config.logRemoteDbReads)
@@ -618,7 +644,7 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
         zklog.info("Database::readTreeRemote() key=" + key);
     }
     string rkey;
-    for (uint64_t i=level; i<256; i++)
+    for (uint64_t i = level; i < 256; i++)
     {
         uint8_t auxByte = (uint8_t)(keys[i]);
         if (auxByte > 1)
@@ -631,7 +657,7 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
     }
 
     // Get a free read db connection
-    DatabaseConnection * pDatabaseConnection = getConnection();
+    DatabaseConnection *pDatabaseConnection = getConnection();
 
     numberOfFields = 0;
 
@@ -653,7 +679,7 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
 
         // Process the result
         numberOfFields = rows.size();
-        for (uint64_t i=0; i<numberOfFields; i++)
+        for (uint64_t i = 0; i < numberOfFields; i++)
         {
             pqxx::row const row = rows[i];
             if (row.size() != 1)
@@ -664,7 +690,7 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
             }
             pqxx::field const fieldData = row[0];
             string fieldDataString = fieldData.c_str();
-            //zklog.info("got value=" + fieldDataString);
+            // zklog.info("got value=" + fieldDataString);
             string hash, data;
 
             string first = "(\"\\\\x";
@@ -675,19 +701,19 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
             size_t secondPosition = fieldDataString.find(second);
             size_t thirdPosition = fieldDataString.find(third);
 
-            if ( (firstPosition != 0) ||
-                 (firstPosition + first.size() + 32*2 != secondPosition ) ||
-                 (secondPosition <= first.size()) ||
-                 (thirdPosition == 0) ||
-                 ( (secondPosition + second.size() + 12*8*2 != thirdPosition) &&
-                   (secondPosition + second.size() + 8*8*2 != thirdPosition) ))
+            if ((firstPosition != 0) ||
+                (firstPosition + first.size() + 32 * 2 != secondPosition) ||
+                (secondPosition <= first.size()) ||
+                (thirdPosition == 0) ||
+                ((secondPosition + second.size() + 12 * 8 * 2 != thirdPosition) &&
+                 (secondPosition + second.size() + 8 * 8 * 2 != thirdPosition)))
             {
                 zklog.error("Database::readTreeRemote() got an invalid field=" + fieldDataString);
                 disposeConnection(pDatabaseConnection);
                 return ZKR_UNSPECIFIED;
             }
 
-            hash = fieldDataString.substr(firstPosition + first.size(), 32*2);
+            hash = fieldDataString.substr(firstPosition + first.size(), 32 * 2);
             data = fieldDataString.substr(secondPosition + second.size(), thirdPosition - secondPosition - second.size());
             vector<Goldilocks::Element> value;
             string2fea(fr, data, value);
@@ -696,14 +722,17 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
             // Store it locally to avoid any future remote access for this key
             if (dbMTCache.enabled() || dbMTACache.enabled())
             {
-                //zklog.info("Database::readTreeRemote() adding hash=" + hash + " to dbMTCache");
-                if(usingAssociativeCache()){
+                // zklog.info("Database::readTreeRemote() adding hash=" + hash + " to dbMTCache");
+                if (usingAssociativeCache())
+                {
                     Goldilocks::Element vhash[4];
-                    string2key(fr, hash, vhash);   
+                    string2key(fr, hash, vhash);
                     dbMTACache.addKeyValue(vhash, value, false);
-                }else{
+                }
+                else
+                {
                     dbMTCache.add(hash, value, false);
-              }
+                }
             }
 #endif
         }
@@ -715,7 +744,7 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
         disposeConnection(pDatabaseConnection);
         return ZKR_DB_ERROR;
     }
-    
+
     // Dispose the read db conneciton
     disposeConnection(pDatabaseConnection);
 
@@ -723,15 +752,15 @@ zkresult Database::readTreeRemote(const string &key, bool *keys, uint64_t level,
     {
         zklog.info("Database::readTreeRemote() key=" + key + " read " + to_string(numberOfFields));
     }
-
+    TimerStopAndLog(DATABASE_READ_TREE_REOMTE);
     return ZKR_SUCCESS;
-    
 }
 
 zkresult Database::writeRemote(bool bProgram, const string &key, const string &value)
 {
+    TimerStart(DATABASE_WRITE_TREE_REOMTE);
     zkresult result = ZKR_SUCCESS;
-    
+
     if (config.dbMultiWrite)
     {
         multiWrite.Lock();
@@ -755,11 +784,11 @@ zkresult Database::writeRemote(bool bProgram, const string &key, const string &v
         const string &tableName = (bProgram ? config.dbProgramTableName : config.dbNodesTableName);
 
         string query = "INSERT INTO " + tableName + " ( hash, data ) VALUES ( E\'\\\\x" + key + "\', E\'\\\\x" + value + "\' ) ON CONFLICT (hash) DO NOTHING;";
-            
-        DatabaseConnection * pDatabaseConnection = getConnection();
+
+        DatabaseConnection *pDatabaseConnection = getConnection();
 
         try
-        {        
+        {
 
 #ifdef DATABASE_COMMIT
             if (autoCommit)
@@ -787,7 +816,7 @@ zkresult Database::writeRemote(bool bProgram, const string &key, const string &v
 
         disposeConnection(pDatabaseConnection);
     }
-
+    TimerStopAndLog(DATABASE_WRITE_TREE_REOMTE);
     return result;
 }
 
@@ -795,8 +824,9 @@ zkresult Database::createStateRoot(void)
 {
     // Copy the state root in the first 4 elements of dbValue
     vector<Goldilocks::Element> value;
-    for (uint64_t i=0; i<12; i++) value.push_back(fr.zero());
-    
+    for (uint64_t i = 0; i < 12; i++)
+        value.push_back(fr.zero());
+
     // Prepare the value string
     string valueString = "";
     string aux;
@@ -811,12 +841,12 @@ zkresult Database::createStateRoot(void)
     {
         // Prepare the query
         string query = "INSERT INTO " + config.dbNodesTableName + " ( hash, data ) VALUES ( E\'\\\\x" + dbStateRootKey + "\', E\'\\\\x" + valueString + "\' ) " +
-                    "ON CONFLICT (hash) DO NOTHING;";
-            
-        DatabaseConnection * pDatabaseConnection = getConnection();
+                       "ON CONFLICT (hash) DO NOTHING;";
+
+        DatabaseConnection *pDatabaseConnection = getConnection();
 
         try
-        {        
+        {
 
 #ifdef DATABASE_COMMIT
             if (autoCommit)
@@ -872,9 +902,11 @@ zkresult Database::updateStateRoot(const Goldilocks::Element (&stateRoot)[4])
 
     // Copy the state root in the first 4 elements of dbValue
     vector<Goldilocks::Element> value;
-    for (uint64_t i=0; i<4; i++) value.push_back(stateRoot[i]);
-    for (uint64_t i=0; i<8; i++) value.push_back(fr.zero());
-    
+    for (uint64_t i = 0; i < 4; i++)
+        value.push_back(stateRoot[i]);
+    for (uint64_t i = 0; i < 8; i++)
+        value.push_back(fr.zero());
+
     // Prepare the value string
     string valueString = "";
     string aux;
@@ -885,40 +917,40 @@ zkresult Database::updateStateRoot(const Goldilocks::Element (&stateRoot)[4])
 
     zkresult r = ZKR_SUCCESS;
 
-    if ( useRemoteDB )
+    if (useRemoteDB)
     {
         if (config.dbMultiWrite)
         {
             multiWrite.Lock();
             multiWrite.data[multiWrite.pendingToFlushDataIndex].nodesStateRoot = valueString;
-            multiWrite.Unlock();    
+            multiWrite.Unlock();
         }
         else
         {
             // Prepare the query
             string query = "UPDATE " + config.dbNodesTableName + " SET data = E\'\\\\x" + valueString + "\' WHERE  hash = E\'\\\\x" + dbStateRootKey + "\';";
-                
-            DatabaseConnection * pDatabaseConnection = getConnection();
+
+            DatabaseConnection *pDatabaseConnection = getConnection();
 
             try
-            {        
+            {
 
-    #ifdef DATABASE_COMMIT
+#ifdef DATABASE_COMMIT
                 if (autoCommit)
-    #endif
+#endif
                 {
                     pqxx::work w(*(pDatabaseConnection->pConnection));
                     pqxx::result res = w.exec(query);
                     w.commit();
                 }
-    #ifdef DATABASE_COMMIT
+#ifdef DATABASE_COMMIT
                 else
                 {
                     if (transaction == NULL)
                         transaction = new pqxx::work{*pConnectionWrite};
                     pqxx::result res = transaction->exec(query);
                 }
-    #endif
+#endif
             }
             catch (const std::exception &e)
             {
@@ -935,10 +967,13 @@ zkresult Database::updateStateRoot(const Goldilocks::Element (&stateRoot)[4])
     if ((r == ZKR_SUCCESS) && (dbMTCache.enabled() || dbMTACache.enabled()))
     {
         // Create in memory cache
-        if(usingAssociativeCache()){
-                dbMTACache.addKeyValue(dbStateRootvKey, value, true);
-        }else{
-                dbMTCache.add(dbStateRootKey, value, true);
+        if (usingAssociativeCache())
+        {
+            dbMTACache.addKeyValue(dbStateRootvKey, value, true);
+        }
+        else
+        {
+            dbMTCache.add(dbStateRootKey, value, true);
         }
     }
 #endif
@@ -966,7 +1001,7 @@ zkresult Database::writeGetTreeFunction(void)
         zklog.error("Database::writeGetTreeFunction() dalled with config.dbGetTree=false");
         return ZKR_DB_ERROR;
     }
-    
+
     if (config.databaseURL == "local")
     {
         zklog.error("Database::writeGetTreeFunction() dalled with config.databaseURL=local");
@@ -976,134 +1011,134 @@ zkresult Database::writeGetTreeFunction(void)
     zkresult result = ZKR_SUCCESS;
 
     string query = string("") +
-    "create or replace function get_tree (root_hash bytea, remaining_key bytea)\n" +
-	"   returns setof state.nodes\n" +
-	"   language plpgsql\n" +
-    "as $$\n" +
-    "declare\n" +
-    "	current_hash bytea;\n" +
-    "	current_row " + config.dbNodesTableName + "%rowtype;\n" +
-    "	remaining_key_length integer;\n" +
-    "	remaining_key_bit integer;\n" +
-    "	byte_71 integer;\n" +
-    "	aux_integer integer;\n" +
-    "begin\n" +
-    "	remaining_key_length = octet_length(remaining_key);\n" +
-    "	current_hash = root_hash;\n" +
+                   "create or replace function get_tree (root_hash bytea, remaining_key bytea)\n" +
+                   "   returns setof state.nodes\n" +
+                   "   language plpgsql\n" +
+                   "as $$\n" +
+                   "declare\n" +
+                   "	current_hash bytea;\n" +
+                   "	current_row " + config.dbNodesTableName + "%rowtype;\n" +
+                   "	remaining_key_length integer;\n" +
+                   "	remaining_key_bit integer;\n" +
+                   "	byte_71 integer;\n" +
+                   "	aux_integer integer;\n" +
+                   "begin\n" +
+                   "	remaining_key_length = octet_length(remaining_key);\n" +
+                   "	current_hash = root_hash;\n" +
 
-    "	-- For every bit (0 or 1) in remaining key\n" +
-    "	for counter in 0..(remaining_key_length-1) loop\n" +
+                   "	-- For every bit (0 or 1) in remaining key\n" +
+                   "	for counter in 0..(remaining_key_length-1) loop\n" +
 
-    "		-- Get the current_hash row and store it into current_row\n" +
-    "		select * into current_row from " + config.dbNodesTableName + " where hash = current_hash;\n" +
-    "		if not found then\n" +
-    "			raise EXCEPTION 'Hash % not found', current_hash;\n" +
-    "		end if;\n" +
+                   "		-- Get the current_hash row and store it into current_row\n" +
+                   "		select * into current_row from " + config.dbNodesTableName + " where hash = current_hash;\n" +
+                   "		if not found then\n" +
+                   "			raise EXCEPTION 'Hash % not found', current_hash;\n" +
+                   "		end if;\n" +
 
-    "		-- Return it as a result\n" +
-    "		return next current_row;\n" +
+                   "		-- Return it as a result\n" +
+                   "		return next current_row;\n" +
 
-    "		-- Data should be a byte array of 12x8 bytes (12 field elements)\n" +
-    "		-- Check data length is exactly 12 field elements\n" +
-    "		if (octet_length(current_row.data) != 12*8) then\n" +
-    "			raise EXCEPTION 'Hash % got invalid data size %', current_hash, octet_length(current_row.data);\n" +
-    "		end if;\n" +
-	//	-- Check that last 3 field elements are zero
-	//	--if (substring(current_row.data from 89 for 8) != E'\\x0000000000000000') then
-	//	--	RAISE EXCEPTION 'Hash % got non-null 12th field element data=%', current_hash, current_row.data;
-	//	--end if;
-	//	--if (substring(current_row.data from 81 for 8) != E'\\x0000000000000000') then
-	//	--	RAISE EXCEPTION 'Hash % got non-null 11th field element data=%', current_hash, current_row.data;
-	//	--end if;
-	//	--if (substring(current_row.data from 73 for 8) != E'\\x0000000000000000') then
-	//	--	RAISE EXCEPTION 'Hash % got non-null 10th field element data=%', current_hash, current_row.data;
-	//	--end if;
-    "		-- If last 4 field elements are 0000, this is an intermediate node\n" +
-    "		byte_71 = get_byte(current_row.data, 71);\n" +
-    "		case byte_71\n" +
-    "		when 0 then\n" +
+                   "		-- Data should be a byte array of 12x8 bytes (12 field elements)\n" +
+                   "		-- Check data length is exactly 12 field elements\n" +
+                   "		if (octet_length(current_row.data) != 12*8) then\n" +
+                   "			raise EXCEPTION 'Hash % got invalid data size %', current_hash, octet_length(current_row.data);\n" +
+                   "		end if;\n" +
+                   //	-- Check that last 3 field elements are zero
+                   //	--if (substring(current_row.data from 89 for 8) != E'\\x0000000000000000') then
+                   //	--	RAISE EXCEPTION 'Hash % got non-null 12th field element data=%', current_hash, current_row.data;
+                   //	--end if;
+                   //	--if (substring(current_row.data from 81 for 8) != E'\\x0000000000000000') then
+                   //	--	RAISE EXCEPTION 'Hash % got non-null 11th field element data=%', current_hash, current_row.data;
+                   //	--end if;
+                   //	--if (substring(current_row.data from 73 for 8) != E'\\x0000000000000000') then
+                   //	--	RAISE EXCEPTION 'Hash % got non-null 10th field element data=%', current_hash, current_row.data;
+                   //	--end if;
+                   "		-- If last 4 field elements are 0000, this is an intermediate node\n" +
+                   "		byte_71 = get_byte(current_row.data, 71);\n" +
+                   "		case byte_71\n" +
+                   "		when 0 then\n" +
 
-    "			-- If the next remaining key is a 0, take the left sibling way, if it is a 1, take the right one\n" +
-    "			remaining_key_bit = get_byte(remaining_key, counter);\n" +
-    "			case remaining_key_bit\n" +
-    "			when 0 then\n" +
-    "				current_hash =\n" +
-    "					substring(current_row.data from 25 for 8) ||\n" +
-    "					substring(current_row.data from 17 for 8) ||\n" +
-    "					substring(current_row.data from 9 for 8) ||\n" +
-    "					substring(current_row.data from 1 for 8);\n" +
-    "			when 1 then\n" +
-    "				current_hash =\n" +
-    "					substring(current_row.data from 57 for 8) ||\n" +
-    "					substring(current_row.data from 49 for 8) ||\n" +
-    "					substring(current_row.data from 41 for 8) ||\n" +
-    "					substring(current_row.data from 33 for 8);\n" +
-    "			else\n" +
-    "				raise EXCEPTION 'Invalid remaining key bit at position % with value %', counter, remaining_key_bit ;\n" +
-    "			end case;\n" +
-    
-    "			-- If the hash is a 0, we reached the end of the branch\n" +
-    "			if (get_byte(current_hash, 0) = 0) and\n" +
-    "			   (get_byte(current_hash, 1) = 0) and\n" +
-    "			   (get_byte(current_hash, 2) = 0) and\n" +
-    "			   (get_byte(current_hash, 3) = 0) and\n" +
-    "			   (get_byte(current_hash, 4) = 0) and\n" +
-    "			   (get_byte(current_hash, 5) = 0) and\n" +
-    "			   (get_byte(current_hash, 6) = 0) and\n" +
-    "			   (get_byte(current_hash, 7) = 0) and\n" +
-    "			   (get_byte(current_hash, 8) = 0) and\n" +
-    "			   (get_byte(current_hash, 9) = 0) and\n" +
-    "			   (get_byte(current_hash, 10) = 0) and\n" +
-    "			   (get_byte(current_hash, 11) = 0) and\n" +
-    "			   (get_byte(current_hash, 12) = 0) and\n" +
-    "			   (get_byte(current_hash, 13) = 0) and\n" +
-    "			   (get_byte(current_hash, 14) = 0) and\n" +
-    "			   (get_byte(current_hash, 15) = 0) and\n" +
-    "			   (get_byte(current_hash, 16) = 0) and\n" +
-    "			   (get_byte(current_hash, 17) = 0) and\n" +
-    "			   (get_byte(current_hash, 18) = 0) and\n" +
-    "			   (get_byte(current_hash, 19) = 0) and\n" +
-    "			   (get_byte(current_hash, 20) = 0) and\n" +
-    "			   (get_byte(current_hash, 21) = 0) and\n" +
-    "			   (get_byte(current_hash, 22) = 0) and\n" +
-    "			   (get_byte(current_hash, 23) = 0) and\n" +
-    "			   (get_byte(current_hash, 24) = 0) and\n" +
-    "			   (get_byte(current_hash, 25) = 0) and\n" +
-    "			   (get_byte(current_hash, 26) = 0) and\n" +
-    "			   (get_byte(current_hash, 27) = 0) and\n" +
-    "			   (get_byte(current_hash, 28) = 0) and\n" +
-    "			   (get_byte(current_hash, 29) = 0) and\n" +
-    "			   (get_byte(current_hash, 30) = 0) and\n" +
-    "			   (get_byte(current_hash, 31) = 0) then\n" +
-    "			   return;\n" +
-    "			end if;\n" +
+                   "			-- If the next remaining key is a 0, take the left sibling way, if it is a 1, take the right one\n" +
+                   "			remaining_key_bit = get_byte(remaining_key, counter);\n" +
+                   "			case remaining_key_bit\n" +
+                   "			when 0 then\n" +
+                   "				current_hash =\n" +
+                   "					substring(current_row.data from 25 for 8) ||\n" +
+                   "					substring(current_row.data from 17 for 8) ||\n" +
+                   "					substring(current_row.data from 9 for 8) ||\n" +
+                   "					substring(current_row.data from 1 for 8);\n" +
+                   "			when 1 then\n" +
+                   "				current_hash =\n" +
+                   "					substring(current_row.data from 57 for 8) ||\n" +
+                   "					substring(current_row.data from 49 for 8) ||\n" +
+                   "					substring(current_row.data from 41 for 8) ||\n" +
+                   "					substring(current_row.data from 33 for 8);\n" +
+                   "			else\n" +
+                   "				raise EXCEPTION 'Invalid remaining key bit at position % with value %', counter, remaining_key_bit ;\n" +
+                   "			end case;\n" +
 
-    "		-- If last 4 field elements are 1000, this is a leaf node\n" +
-    "		when 1 then	\n" +
+                   "			-- If the hash is a 0, we reached the end of the branch\n" +
+                   "			if (get_byte(current_hash, 0) = 0) and\n" +
+                   "			   (get_byte(current_hash, 1) = 0) and\n" +
+                   "			   (get_byte(current_hash, 2) = 0) and\n" +
+                   "			   (get_byte(current_hash, 3) = 0) and\n" +
+                   "			   (get_byte(current_hash, 4) = 0) and\n" +
+                   "			   (get_byte(current_hash, 5) = 0) and\n" +
+                   "			   (get_byte(current_hash, 6) = 0) and\n" +
+                   "			   (get_byte(current_hash, 7) = 0) and\n" +
+                   "			   (get_byte(current_hash, 8) = 0) and\n" +
+                   "			   (get_byte(current_hash, 9) = 0) and\n" +
+                   "			   (get_byte(current_hash, 10) = 0) and\n" +
+                   "			   (get_byte(current_hash, 11) = 0) and\n" +
+                   "			   (get_byte(current_hash, 12) = 0) and\n" +
+                   "			   (get_byte(current_hash, 13) = 0) and\n" +
+                   "			   (get_byte(current_hash, 14) = 0) and\n" +
+                   "			   (get_byte(current_hash, 15) = 0) and\n" +
+                   "			   (get_byte(current_hash, 16) = 0) and\n" +
+                   "			   (get_byte(current_hash, 17) = 0) and\n" +
+                   "			   (get_byte(current_hash, 18) = 0) and\n" +
+                   "			   (get_byte(current_hash, 19) = 0) and\n" +
+                   "			   (get_byte(current_hash, 20) = 0) and\n" +
+                   "			   (get_byte(current_hash, 21) = 0) and\n" +
+                   "			   (get_byte(current_hash, 22) = 0) and\n" +
+                   "			   (get_byte(current_hash, 23) = 0) and\n" +
+                   "			   (get_byte(current_hash, 24) = 0) and\n" +
+                   "			   (get_byte(current_hash, 25) = 0) and\n" +
+                   "			   (get_byte(current_hash, 26) = 0) and\n" +
+                   "			   (get_byte(current_hash, 27) = 0) and\n" +
+                   "			   (get_byte(current_hash, 28) = 0) and\n" +
+                   "			   (get_byte(current_hash, 29) = 0) and\n" +
+                   "			   (get_byte(current_hash, 30) = 0) and\n" +
+                   "			   (get_byte(current_hash, 31) = 0) then\n" +
+                   "			   return;\n" +
+                   "			end if;\n" +
 
-    "			current_hash =\n" +
-    "				substring(current_row.data from 57 for 8) ||\n" +
-    "				substring(current_row.data from 49 for 8) ||\n" +
-    "				substring(current_row.data from 41 for 8) ||\n" +
-    "				substring(current_row.data from 33 for 8);\n" +
-    "			select * into current_row from " + config.dbNodesTableName + " where hash = current_hash;\n" +
-    "			if not found then\n" +
-    "				raise EXCEPTION 'Hash % not found', current_hash;\n" +
-    "			end if;\n" +
-    "			return next current_row;\n" +
-    "			return;\n" +
+                   "		-- If last 4 field elements are 1000, this is a leaf node\n" +
+                   "		when 1 then	\n" +
 
-    "		else\n" +
-    "			raise EXCEPTION 'Hash % got invalid 9th field element data=%', current_hash, current_row.data;\n" +
-    "		end case;\n" +
-			
-    "	end loop;\n" +
+                   "			current_hash =\n" +
+                   "				substring(current_row.data from 57 for 8) ||\n" +
+                   "				substring(current_row.data from 49 for 8) ||\n" +
+                   "				substring(current_row.data from 41 for 8) ||\n" +
+                   "				substring(current_row.data from 33 for 8);\n" +
+                   "			select * into current_row from " + config.dbNodesTableName + " where hash = current_hash;\n" +
+                   "			if not found then\n" +
+                   "				raise EXCEPTION 'Hash % not found', current_hash;\n" +
+                   "			end if;\n" +
+                   "			return next current_row;\n" +
+                   "			return;\n" +
 
-    "	return;\n" +
-    "end;$$\n";
-        
-    DatabaseConnection * pDatabaseConnection = getConnection();
-    
+                   "		else\n" +
+                   "			raise EXCEPTION 'Hash % got invalid 9th field element data=%', current_hash, current_row.data;\n" +
+                   "		end case;\n" +
+
+                   "	end loop;\n" +
+
+                   "	return;\n" +
+                   "end;$$\n";
+
+    DatabaseConnection *pDatabaseConnection = getConnection();
+
     try
     {
 #ifdef DATABASE_COMMIT
@@ -1129,16 +1164,17 @@ zkresult Database::writeGetTreeFunction(void)
         result = ZKR_DB_ERROR;
         queryFailed();
     }
-    
+
     disposeConnection(pDatabaseConnection);
 
     zklog.info("Database::writeGetTreeFunction() returns " + zkresult2string(result));
-        
+
     return result;
 }
 
-zkresult Database::setProgram (const string &_key, const vector<uint8_t> &data, const bool persistent)
+zkresult Database::setProgram(const string &_key, const vector<uint8_t> &data, const bool persistent)
 {
+    TimerStart(DATABASE_SET_PROGRAM);
     // Check that it has been initialized before
     if (!bInitialized)
     {
@@ -1152,14 +1188,14 @@ zkresult Database::setProgram (const string &_key, const vector<uint8_t> &data, 
     string key = NormalizeToNFormat(_key, 64);
     key = stringToLower(key);
 
-    if ( useRemoteDB
+    if (useRemoteDB
 #ifdef DATABASE_USE_CACHE
-         && persistent
+        && persistent
 #endif
-         )
+    )
     {
         string sData = "";
-        for (uint64_t i=0; i<data.size(); i++)
+        for (uint64_t i = 0; i < data.size(); i++)
         {
             sData += byte2string(data[i]);
         }
@@ -1188,17 +1224,19 @@ zkresult Database::setProgram (const string &_key, const vector<uint8_t> &data, 
         s += " data=";
         for (uint64_t i = 0; (i < (data.size()) && (i < 100)); i++)
             s += byte2string(data[i]);
-        if (data.size() > 100) s += "...";
+        if (data.size() > 100)
+            s += "...";
         s += " persistent=" + to_string(persistent);
         zklog.info(s);
     }
 #endif
-
+    TimerStopAndLog(DATABASE_SET_PROGRAM);
     return r;
 }
 
 zkresult Database::getProgram(const string &_key, vector<uint8_t> &data, DatabaseMap *dbReadLog)
 {
+    TimerStart(DATABASE_GET_PROGRAM);
     // Check that it has been initialized before
     if (!bInitialized)
     {
@@ -1209,7 +1247,8 @@ zkresult Database::getProgram(const string &_key, vector<uint8_t> &data, Databas
     zkresult r;
 
     struct timeval t;
-    if (dbReadLog != NULL) gettimeofday(&t, NULL);
+    if (dbReadLog != NULL)
+        gettimeofday(&t, NULL);
 
     // Normalize key format
     string key = NormalizeToNFormat(_key, 64);
@@ -1220,7 +1259,8 @@ zkresult Database::getProgram(const string &_key, vector<uint8_t> &data, Databas
     if (dbProgramCache.enabled() && dbProgramCache.find(key, data))
     {
         // Add to the read log
-        if (dbReadLog != NULL) dbReadLog->add(key, data, true, TimeDiff(t));
+        if (dbReadLog != NULL)
+            dbReadLog->add(key, data, true, TimeDiff(t));
 
         r = ZKR_SUCCESS;
     }
@@ -1228,29 +1268,32 @@ zkresult Database::getProgram(const string &_key, vector<uint8_t> &data, Databas
     else if (config.dbMultiWrite && multiWrite.findProgram(key, data))
     {
         // Add to the read log
-        if (dbReadLog != NULL) dbReadLog->add(key, data, true, TimeDiff(t));
+        if (dbReadLog != NULL)
+            dbReadLog->add(key, data, true, TimeDiff(t));
 
         r = ZKR_SUCCESS;
     }
     else
 #endif
-    if (useRemoteDB)
+        if (useRemoteDB)
     {
         // Otherwise, read it remotelly
         string sData;
         r = readRemote(true, key, sData);
         if (r == ZKR_SUCCESS)
         {
-            //String to byte/uint8_t vector
+            // String to byte/uint8_t vector
             string2ba(sData, data);
 
 #ifdef DATABASE_USE_CACHE
             // Store it locally to avoid any future remote access for this key
-            if (dbProgramCache.enabled()) dbProgramCache.add(key, data, false);
+            if (dbProgramCache.enabled())
+                dbProgramCache.add(key, data, false);
 #endif
 
             // Add to the read log
-            if (dbReadLog != NULL) dbReadLog->add(key, data, false, TimeDiff(t));
+            if (dbReadLog != NULL)
+                dbReadLog->add(key, data, false, TimeDiff(t));
         }
     }
     else
@@ -1268,16 +1311,18 @@ zkresult Database::getProgram(const string &_key, vector<uint8_t> &data, Databas
         s += " data=";
         for (uint64_t i = 0; (i < (data.size()) && (i < 100)); i++)
             s += byte2string(data[i]);
-        if (data.size() > 100) s += "...";
+        if (data.size() > 100)
+            s += "...";
         zklog.info(s);
     }
 #endif
-
+    TimerStopAndLog(DATABASE_GET_PROGRAM);
     return r;
 }
-    
+
 zkresult Database::flush(uint64_t &thisBatch, uint64_t &lastSentBatch)
 {
+    TimerStart(DATABASE_FLUSH);
     if (!config.dbMultiWrite)
     {
         return ZKR_SUCCESS;
@@ -1293,7 +1338,7 @@ zkresult Database::flush(uint64_t &thisBatch, uint64_t &lastSentBatch)
         return ZKR_SUCCESS;
     }
 
-    //TimerStart(DATABASE_FLUSH);
+    // TimerStart(DATABASE_FLUSH);
 
     multiWrite.Lock();
 
@@ -1313,10 +1358,11 @@ zkresult Database::flush(uint64_t &thisBatch, uint64_t &lastSentBatch)
     sem_post(&senderSem);
 
     multiWrite.Unlock();
+    TimerStopAndLog(DATABASE_FLUSH);
     return ZKR_SUCCESS;
 }
 
-void Database::semiFlush (void)
+void Database::semiFlush(void)
 {
     if (!config.dbMultiWrite)
     {
@@ -1348,10 +1394,10 @@ zkresult Database::getFlushStatus(uint64_t &storedFlushId, uint64_t &storingFlus
     return ZKR_SUCCESS;
 }
 
-zkresult Database::sendData (void)
+zkresult Database::sendData(void)
 {
     zkresult zkr = ZKR_SUCCESS;
-    
+
     // Time calculation variables
     struct timeval t;
     uint64_t timeDiff = 0;
@@ -1375,11 +1421,12 @@ zkresult Database::sendData (void)
     }
 
     // Get a free write db connection
-    DatabaseConnection * pDatabaseConnection = getConnection();
+    DatabaseConnection *pDatabaseConnection = getConnection();
 
     try
     {
-        if (config.dbMetrics) gettimeofday(&t, NULL);
+        if (config.dbMetrics)
+            gettimeofday(&t, NULL);
         unordered_map<string, string>::const_iterator it;
         if (data.multiQuery.isEmpty())
         {
@@ -1394,7 +1441,7 @@ zkresult Database::sendData (void)
                 while (it != data.nodes.end())
                 {
                     // If queries is empty or last query is full, add a new query
-                    if ( (data.multiQuery.queries.size() == 0) || (data.multiQuery.queries[currentQuery].full))
+                    if ((data.multiQuery.queries.size() == 0) || (data.multiQuery.queries[currentQuery].full))
                     {
                         SingleQuery query;
                         data.multiQuery.queries.emplace_back(query);
@@ -1432,7 +1479,7 @@ zkresult Database::sendData (void)
                 while (it != data.program.end())
                 {
                     // If queries is empty or last query is full, add a new query
-                    if ( (data.multiQuery.queries.size() == 0) || (data.multiQuery.queries[currentQuery].full))
+                    if ((data.multiQuery.queries.size() == 0) || (data.multiQuery.queries[currentQuery].full))
                     {
                         SingleQuery query;
                         data.multiQuery.queries.emplace_back(query);
@@ -1467,7 +1514,7 @@ zkresult Database::sendData (void)
             if (data.nodesStateRoot.size() > 0)
             {
                 // If queries is empty or last query is full, add a new query
-                if ( (data.multiQuery.queries.size() == 0) || (data.multiQuery.queries[currentQuery].full))
+                if ((data.multiQuery.queries.size() == 0) || (data.multiQuery.queries[currentQuery].full))
                 {
                     SingleQuery query;
                     data.multiQuery.queries.emplace_back(query);
@@ -1495,15 +1542,15 @@ zkresult Database::sendData (void)
             {
                 fields = data.nodes.size() + data.program.size() + (data.nodesStateRoot.size() > 0 ? 1 : 0);
                 zklog.info("Database::sendData() dbMetrics multiWrite nodes=" + to_string(data.nodes.size()) +
-                    " program=" + to_string(data.program.size()) +
-                    " nodesStateRootCounter=" + to_string(data.nodesStateRoot.size() > 0 ? 1 : 0) +
-                    " query.size=" + to_string(data.multiQuery.size()) + "B=" + to_string(data.multiQuery.size()/zkmax(fields,1)) + "B/field" +
-                    " queries.size=" + to_string(data.multiQuery.queries.size()) +
-                    " total=" + to_string(fields) + "fields");
+                           " program=" + to_string(data.program.size()) +
+                           " nodesStateRootCounter=" + to_string(data.nodesStateRoot.size() > 0 ? 1 : 0) +
+                           " query.size=" + to_string(data.multiQuery.size()) + "B=" + to_string(data.multiQuery.size() / zkmax(fields, 1)) + "B/field" +
+                           " queries.size=" + to_string(data.multiQuery.queries.size()) +
+                           " total=" + to_string(fields) + "fields");
             }
 
             // Send all unsent queries to database
-            for (uint64_t i=0; i<data.multiQuery.queries.size(); i++)
+            for (uint64_t i = 0; i < data.multiQuery.queries.size(); i++)
             {
                 // Skip sent queries
                 if (data.multiQuery.queries[i].sent)
@@ -1524,17 +1571,17 @@ zkresult Database::sendData (void)
                 data.multiQuery.queries[i].sent = true;
             }
 
-            //zklog.info("Database::flush() sent query=" + query);
+            // zklog.info("Database::flush() sent query=" + query);
             if (config.dbMetrics)
             {
                 timeDiff = TimeDiff(t);
-                zklog.info("Database::sendData() dbMetrics multiWrite total=" + to_string(fields) + "fields=" + to_string(timeDiff) + "us=" + to_string(timeDiff/zkmax(fields,1)) + "us/field");
+                zklog.info("Database::sendData() dbMetrics multiWrite total=" + to_string(fields) + "fields=" + to_string(timeDiff) + "us=" + to_string(timeDiff / zkmax(fields, 1)) + "us/field");
             }
 
 #ifdef LOG_DB_WRITE_QUERY
             {
                 string query;
-                for (uint64_t i=0; i<data.multiQuery.queries.size(); i++)
+                for (uint64_t i = 0; i < data.multiQuery.queries.size(); i++)
                 {
                     query += data.multiQuery.queries[i].query;
                 }
@@ -1569,14 +1616,14 @@ zkresult Database::sendData (void)
 }
 
 // Get flush data, written to database by dbSenderThread; it blocks
-zkresult Database::getFlushData(uint64_t flushId, uint64_t &storedFlushId, unordered_map<string, string> (&nodes), unordered_map<string, string> (&program), string &nodesStateRoot)
+zkresult Database::getFlushData(uint64_t flushId, uint64_t &storedFlushId, unordered_map<string, string>(&nodes), unordered_map<string, string>(&program), string &nodesStateRoot)
 {
-    //zklog.info("--> getFlushData()");
+    // zklog.info("--> getFlushData()");
 
     // Set the deadline to now + 60 seconds
     struct timespec deadline;
     clock_gettime(CLOCK_REALTIME, &deadline);
-	deadline.tv_sec += 60;
+    deadline.tv_sec += 60;
 
     // Try to get the semaphore
     int iResult;
@@ -1591,11 +1638,11 @@ zkresult Database::getFlushData(uint64_t flushId, uint64_t &storedFlushId, unord
     MultiWriteData &data = multiWrite.data[multiWrite.synchronizingDataIndex];
 
     zklog.info("Database::getFlushData woke up: pendingToFlushDataIndex=" + to_string(multiWrite.pendingToFlushDataIndex) +
-        " storingDataIndex=" + to_string(multiWrite.storingDataIndex) +
-        " synchronizingDataIndex=" + to_string(multiWrite.synchronizingDataIndex) +
-        " nodes=" + to_string(data.nodes.size()) +
-        " program=" + to_string(data.program.size()) +
-        " nodesStateRoot=" + data.nodesStateRoot);
+               " storingDataIndex=" + to_string(multiWrite.storingDataIndex) +
+               " synchronizingDataIndex=" + to_string(multiWrite.synchronizingDataIndex) +
+               " nodes=" + to_string(data.nodes.size()) +
+               " program=" + to_string(data.program.size()) +
+               " nodesStateRoot=" + data.nodesStateRoot);
 
     if (data.nodes.size() > 0)
     {
@@ -1614,7 +1661,7 @@ zkresult Database::getFlushData(uint64_t flushId, uint64_t &storedFlushId, unord
 
     multiWrite.Unlock();
 
-    //zklog.info("<-- getFlushData()");
+    // zklog.info("<-- getFlushData()");
 
     return ZKR_SUCCESS;
 }
@@ -1649,8 +1696,9 @@ void Database::printTree(const string &root, string prefix)
     string key = root;
     vector<Goldilocks::Element> value;
     Goldilocks::Element vKey[4];
-    if(Database::useAssociativeCache) string2key(fr, key, vKey);  
-    read(key,vKey,value, NULL);
+    if (Database::useAssociativeCache)
+        string2key(fr, key, vKey);
+    read(key, vKey, value, NULL);
 
     if (value.size() != 12)
     {
@@ -1690,7 +1738,7 @@ void Database::printTree(const string &root, string prefix)
         string hashValue = fea2string(fr, value[4], value[5], value[6], value[7]);
         zklog.info(prefix + "hashValue=" + hashValue);
         vector<Goldilocks::Element> leafValue;
-        Goldilocks::Element vKey[4]={value[4],value[5],value[6],value[7]};
+        Goldilocks::Element vKey[4] = {value[4], value[5], value[6], value[7]};
         read(rKey, vKey, leafValue, NULL);
         if (leafValue.size() == 12)
         {
@@ -1733,16 +1781,17 @@ void Database::printTree(const string &root, string prefix)
         zklog.error("Database::printTree() found value[8]=" + fr.toString(value[8], 16));
         return;
     }
-    if (prefix == "") zklog.info("");
+    if (prefix == "")
+        zklog.info("");
 }
 
-void Database::clearCache (void)
+void Database::clearCache(void)
 {
     dbMTCache.clear();
     dbProgramCache.clear();
 }
 
-void *dbSenderThread (void *arg)
+void *dbSenderThread(void *arg)
 {
     Database *pDatabase = (Database *)arg;
     zklog.info("dbSenderThread() started");
@@ -1774,7 +1823,7 @@ void *dbSenderThread (void *arg)
         // If processing data is empty, then simply pretend to have sent data
         else if (multiWrite.data[multiWrite.pendingToFlushDataIndex].IsEmpty())
         {
-            //zklog.warning("dbSenderThread() found pending to flush data empty");
+            // zklog.warning("dbSenderThread() found pending to flush data empty");
 
             // Mark as if we sent all batches
             multiWrite.storedFlushId = multiWrite.lastFlushId;
@@ -1814,7 +1863,6 @@ void *dbSenderThread (void *arg)
 #endif
                 bDataEmpty = true;
             }
-
         }
 
         // Unlock to let more processing batch data in
@@ -1857,7 +1905,7 @@ void *dbSenderThread (void *arg)
     return NULL;
 }
 
-void *dbCacheSynchThread (void *arg)
+void *dbCacheSynchThread(void *arg)
 {
     Database *pDatabase = (Database *)arg;
     zklog.info("dbCacheSynchThread() started");
@@ -1869,7 +1917,7 @@ void *dbCacheSynchThread (void *arg)
 
     while (true)
     {
-        HashDBInterface *pHashDBRemote = new HashDBRemote (pDatabase->fr, config);
+        HashDBInterface *pHashDBRemote = new HashDBRemote(pDatabase->fr, config);
         if (pHashDBRemote == NULL)
         {
             zklog.error("dbCacheSynchThread() failed calling new HashDBRemote()");
@@ -1882,7 +1930,7 @@ void *dbCacheSynchThread (void *arg)
             unordered_map<string, string> nodes;
             unordered_map<string, string> program;
             string nodesStateRoot;
-            
+
             // Call getFlushData() remotelly
             zkresult zkr = pHashDBRemote->getFlushData(storedFlushId, storedFlushId, nodes, program, nodesStateRoot);
             if (zkr != ZKR_SUCCESS)
@@ -1892,7 +1940,7 @@ void *dbCacheSynchThread (void *arg)
                 break;
             }
 
-            if (nodes.size()==0 && program.size()==0 && nodesStateRoot.size()==0)
+            if (nodes.size() == 0 && program.size() == 0 && nodesStateRoot.size() == 0)
             {
                 zklog.info("dbCacheSynchThread() called getFlushData() remotely and got no data: storedFlushId=" + to_string(storedFlushId));
                 continue;
@@ -1966,14 +2014,14 @@ void loadDb2MemCache(const Config &config)
     TimerStart(LOAD_DB_TO_CACHE);
 
     Goldilocks fr;
-    HashDB * pHashDB = (HashDB *)hashDBSingleton.get();
+    HashDB *pHashDB = (HashDB *)hashDBSingleton.get();
 
     vector<Goldilocks::Element> dbValue;
     zkresult zkr = pHashDB->db.read(Database::dbStateRootKey, Database::dbStateRootvKey, dbValue, NULL, true);
 
     if (zkr == ZKR_DB_KEY_NOT_FOUND)
     {
-        zklog.warning("loadDb2MemCache() dbStateRootKey=" +  Database::dbStateRootKey + " not found in database; normal only if database is empty");
+        zklog.warning("loadDb2MemCache() dbStateRootKey=" + Database::dbStateRootKey + " not found in database; normal only if database is empty");
         TimerStopAndLog(LOAD_DB_TO_CACHE);
         return;
     }
@@ -1983,7 +2031,7 @@ void loadDb2MemCache(const Config &config)
         TimerStopAndLog(LOAD_DB_TO_CACHE);
         return;
     }
-    
+
     string stateRootKey = fea2string(fr, dbValue[0], dbValue[1], dbValue[2], dbValue[3]);
     zklog.info("loadDb2MemCache() found state root=" + stateRootKey);
 
@@ -2005,7 +2053,7 @@ void loadDb2MemCache(const Config &config)
     treeMap[0] = emptyVector;
     treeMap[0].push_back(stateRootKey);
     unordered_map<uint64_t, std::vector<std::string>>::iterator treeMapIterator;
-    for (uint64_t level=0; level<256; level++)
+    for (uint64_t level = 0; level < 256; level++)
     {
         // Spend only 10 seconds
         if (TimeDiff(loadCacheStartTime) > config.loadDBToMemTimeout)
@@ -2019,16 +2067,16 @@ void loadDb2MemCache(const Config &config)
             break;
         }
 
-        if (treeMapIterator->second.size()==0)
+        if (treeMapIterator->second.size() == 0)
         {
             break;
         }
 
-        treeMap[level+1] = emptyVector;
+        treeMap[level + 1] = emptyVector;
 
-        //zklog.info("loadDb2MemCache() searching at level=" + to_string(level) + " for elements=" + to_string(treeMapIterator->second.size()));
-        
-        for (uint64_t i=0; i<treeMapIterator->second.size(); i++)
+        // zklog.info("loadDb2MemCache() searching at level=" + to_string(level) + " for elements=" + to_string(treeMapIterator->second.size()));
+
+        for (uint64_t i = 0; i < treeMapIterator->second.size(); i++)
         {
             // Spend only 10 seconds
             if (TimeDiff(loadCacheStartTime) > config.loadDBToMemTimeout)
@@ -2039,7 +2087,8 @@ void loadDb2MemCache(const Config &config)
             hash = treeMapIterator->second[i];
             dbValue.clear();
             Goldilocks::Element vhash[4];
-            if(pHashDB->db.usingAssociativeCache()) string2key(fr, hash, vhash);
+            if (pHashDB->db.usingAssociativeCache())
+                string2key(fr, hash, vhash);
             zkresult zkr = pHashDB->db.read(hash, vhash, dbValue, NULL, true);
 
             if (zkr != ZKR_SUCCESS)
@@ -2055,9 +2104,10 @@ void loadDb2MemCache(const Config &config)
                 return;
             }
             counter++;
-            if(Database::dbMTCache.enabled()){
-                double sizePercentage = double(Database::dbMTCache.getCurrentSize())*100.0/double(Database::dbMTCache.getMaxSize());
-                if ( sizePercentage > 90 )
+            if (Database::dbMTCache.enabled())
+            {
+                double sizePercentage = double(Database::dbMTCache.getCurrentSize()) * 100.0 / double(Database::dbMTCache.getMaxSize());
+                if (sizePercentage > 90)
                 {
                     zklog.info("loadDb2MemCache() stopping since size percentage=" + to_string(sizePercentage));
                     break;
@@ -2072,14 +2122,14 @@ void loadDb2MemCache(const Config &config)
                     leftHash = fea2string(fr, dbValue[0], dbValue[1], dbValue[2], dbValue[3]);
                     if (leftHash != "0")
                     {
-                        treeMap[level+1].push_back(leftHash);
-                        //zklog.info("loadDb2MemCache() level=" + to_string(level) + " found leftHash=" + leftHash);
+                        treeMap[level + 1].push_back(leftHash);
+                        // zklog.info("loadDb2MemCache() level=" + to_string(level) + " found leftHash=" + leftHash);
                     }
                     rightHash = fea2string(fr, dbValue[4], dbValue[5], dbValue[6], dbValue[7]);
                     if (rightHash != "0")
                     {
-                        treeMap[level+1].push_back(rightHash);
-                        //zklog.info("loadDb2MemCache() level=" + to_string(level) + " found rightHash=" + rightHash);
+                        treeMap[level + 1].push_back(rightHash);
+                        // zklog.info("loadDb2MemCache() level=" + to_string(level) + " found rightHash=" + rightHash);
                     }
                 }
                 // If capacity is 1000, this is a leaf node that contains right hash of the value node
@@ -2088,9 +2138,9 @@ void loadDb2MemCache(const Config &config)
                     rightHash = fea2string(fr, dbValue[4], dbValue[5], dbValue[6], dbValue[7]);
                     if (rightHash != "0")
                     {
-                        //zklog.info("loadDb2MemCache() level=" + to_string(level) + " found value rightHash=" + rightHash);
+                        // zklog.info("loadDb2MemCache() level=" + to_string(level) + " found value rightHash=" + rightHash);
                         dbValue.clear();
-                        Goldilocks::Element vRightHash[4]={dbValue[4], dbValue[5], dbValue[6], dbValue[7]};
+                        Goldilocks::Element vRightHash[4] = {dbValue[4], dbValue[5], dbValue[6], dbValue[7]};
                         zkresult zkr = pHashDB->db.read(rightHash, vRightHash, dbValue, NULL, true);
                         if (zkr != ZKR_SUCCESS)
                         {
@@ -2105,8 +2155,9 @@ void loadDb2MemCache(const Config &config)
         }
     }
 
-    if(Database::dbMTCache.enabled()){
-        zklog.info("loadDb2MemCache() done counter=" + to_string(counter) + " cache at " + to_string((double(Database::dbMTCache.getCurrentSize())/double(Database::dbMTCache.getMaxSize()))*100) + "%");
+    if (Database::dbMTCache.enabled())
+    {
+        zklog.info("loadDb2MemCache() done counter=" + to_string(counter) + " cache at " + to_string((double(Database::dbMTCache.getCurrentSize()) / double(Database::dbMTCache.getMaxSize())) * 100) + "%");
     }
     TimerStopAndLog(LOAD_DB_TO_CACHE);
 
