@@ -267,21 +267,21 @@ zkresult HashDB::flush(const string &batchUUID, const string &newStateRoot, cons
     }
     else
     {
+#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
+        struct timeval t;
+        gettimeofday(&t, NULL);
+#endif
         if (config.stateManager && (batchUUID.size() != 0))
         {
             result = stateManager.flush(batchUUID, newStateRoot, persistence, db, flushId, storedFlushId);
         }
         else
         {
-#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
-            struct timeval t;
-            gettimeofday(&t, NULL);
-#endif
             result = db.flush(flushId, storedFlushId);
-#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
-            stateManager.metricTime(batchUUID, "db.read", TimeDiff(t));
-#endif
         }
+#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
+        stateManager.metricTime(batchUUID, "db.flush", TimeDiff(t));
+#endif
     }
 
 #ifdef LOG_TIME_STATISTICS_HASHDB

@@ -105,10 +105,13 @@ public:
     zkresult flush(const string &batchUUID, const string &newStateRoot, const Persistence persistence, Database &db, uint64_t &flushId, uint64_t &lastSentFlushId);
     void print(bool bDbContent = false);
 
-    zkresult metricTime(const string &batchUUID, uint64_t diff);
+    zkresult metricTime(const string &batchUUID, const string &key, uint64_t diff);
 
     // Lock/Unlock
-    void Lock(void) { pthread_mutex_lock(&mutex); };
+    void Lock(void)
+    {
+        pthread_mutex_lock(&mutex);
+    };
     void Unlock(void) { pthread_mutex_unlock(&mutex); };
 };
 
