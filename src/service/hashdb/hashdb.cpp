@@ -255,7 +255,14 @@ zkresult HashDB::flush(const string &batchUUID, const string &newStateRoot, cons
         }
         else
         {
+#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
+            struct timeval t;
+            gettimeofday(&t, NULL);
+#endif
             result = db64.flush(flushId, storedFlushId);
+#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
+            stateManager.metricTime(batchUUID, "db64.flush", TimeDiff(t));
+#endif
         }
     }
     else
@@ -266,7 +273,14 @@ zkresult HashDB::flush(const string &batchUUID, const string &newStateRoot, cons
         }
         else
         {
+#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
+            struct timeval t;
+            gettimeofday(&t, NULL);
+#endif
             result = db.flush(flushId, storedFlushId);
+#ifdef LOG_TIME_STATISTICS_STATE_MANAGER
+            stateManager.metricTime(batchUUID, "db.read", TimeDiff(t));
+#endif
         }
     }
 
