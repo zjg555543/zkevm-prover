@@ -23,14 +23,15 @@ HashDB::HashDB(Goldilocks &fr, const Config &config) : fr(fr), config(config), d
 }
 
 HashDB::~HashDB()
-{    
+{
 #ifdef LOG_TIME_STATISTICS_HASHDB
     tms.print("HashDB");
-#endif    
+#endif
 }
 
-zkresult HashDB::set (const string &batchUUID, uint64_t tx, const Goldilocks::Element (&oldRoot)[4], const Goldilocks::Element (&key)[4], const mpz_class &value, const Persistence persistence, Goldilocks::Element (&newRoot)[4], SmtSetResult *result, DatabaseMap *dbReadLog)
+zkresult HashDB::set(const string &batchUUID, uint64_t tx, const Goldilocks::Element (&oldRoot)[4], const Goldilocks::Element (&key)[4], const mpz_class &value, const Persistence persistence, Goldilocks::Element (&newRoot)[4], SmtSetResult *result, DatabaseMap *dbReadLog)
 {
+    TimerStart(STATE_DB_SET);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -40,8 +41,10 @@ zkresult HashDB::set (const string &batchUUID, uint64_t tx, const Goldilocks::El
 #endif
 
     SmtSetResult *r;
-    if (result == NULL) r = new SmtSetResult;
-    else r = result;
+    if (result == NULL)
+        r = new SmtSetResult;
+    else
+        r = result;
 
     zkresult zkr;
 
@@ -53,19 +56,23 @@ zkresult HashDB::set (const string &batchUUID, uint64_t tx, const Goldilocks::El
     {
         zkr = smt.set(batchUUID, tx, db, oldRoot, key, value, persistence, *r, dbReadLog);
     }
-    for (int i = 0; i < 4; i++) newRoot[i] = r->newRoot[i];
+    for (int i = 0; i < 4; i++)
+        newRoot[i] = r->newRoot[i];
 
-    if (result == NULL) delete r;
+    if (result == NULL)
+        delete r;
 
 #ifdef LOG_TIME_STATISTICS_HASHDB
     tms.add("set", TimeDiff(t));
 #endif
 
+    TimerStopAndLog(STATE_DB_SET);
     return zkr;
 }
 
-zkresult HashDB::get (const string &batchUUID, const Goldilocks::Element (&root)[4], const Goldilocks::Element (&key)[4], mpz_class &value, SmtGetResult *result, DatabaseMap *dbReadLog)
+zkresult HashDB::get(const string &batchUUID, const Goldilocks::Element (&root)[4], const Goldilocks::Element (&key)[4], mpz_class &value, SmtGetResult *result, DatabaseMap *dbReadLog)
 {
+    TimerStart(STATE_DB_GET);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -75,11 +82,13 @@ zkresult HashDB::get (const string &batchUUID, const Goldilocks::Element (&root)
 #endif
 
     SmtGetResult *r;
-    if (result == NULL) r = new SmtGetResult;
-    else r = result;
+    if (result == NULL)
+        r = new SmtGetResult;
+    else
+        r = result;
 
     zkresult zkr;
-    
+
     if (config.hashDB64)
     {
         zkr = smt64.get(batchUUID, db64, root, key, *r, dbReadLog);
@@ -91,17 +100,20 @@ zkresult HashDB::get (const string &batchUUID, const Goldilocks::Element (&root)
 
     value = r->value;
 
-    if (result == NULL) delete r;
+    if (result == NULL)
+        delete r;
 
 #ifdef LOG_TIME_STATISTICS_HASHDB
     tms.add("get", TimeDiff(t));
 #endif
 
+    TimerStopAndLog(STATE_DB_GET);
     return zkr;
 }
 
 zkresult HashDB::setProgram(const Goldilocks::Element (&key)[4], const vector<uint8_t> &data, const bool persistent)
 {
+    TimerStart(STATE_DB_SET_PROGRAM);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -123,12 +135,13 @@ zkresult HashDB::setProgram(const Goldilocks::Element (&key)[4], const vector<ui
 #ifdef LOG_TIME_STATISTICS_HASHDB
     tms.add("setProgram", TimeDiff(t));
 #endif
-
+    TimerStopAndLog(STATE_DB_SET_PROGRAM);
     return zkr;
 }
 
 zkresult HashDB::getProgram(const Goldilocks::Element (&key)[4], vector<uint8_t> &data, DatabaseMap *dbReadLog)
 {
+    TimerStart(STATE_DB_GET_PROGRAM);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -141,7 +154,7 @@ zkresult HashDB::getProgram(const Goldilocks::Element (&key)[4], vector<uint8_t>
     zkresult zkr;
     if (config.hashDB64)
     {
-        zkr = db64.getProgram(fea2string(fr, key), data, dbReadLog);        
+        zkr = db64.getProgram(fea2string(fr, key), data, dbReadLog);
     }
     else
     {
@@ -151,12 +164,13 @@ zkresult HashDB::getProgram(const Goldilocks::Element (&key)[4], vector<uint8_t>
 #ifdef LOG_TIME_STATISTICS_HASHDB
     tms.add("getProgram", TimeDiff(t));
 #endif
-
+    TimerStopAndLog(STATE_DB_GET_PROGRAM);
     return zkr;
 }
 
 void HashDB::loadDB(const DatabaseMap::MTMap &input, const bool persistent)
 {
+    TimerStart(STATE_DB_LOAD_DB);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -185,10 +199,12 @@ void HashDB::loadDB(const DatabaseMap::MTMap &input, const bool persistent)
     tms.add("loadDB", TimeDiff(t));
 #endif
 
+    TimerStopAndLog(STATE_DB_LOAD_DB);
 }
 
 void HashDB::loadProgramDB(const DatabaseMap::ProgramMap &input, const bool persistent)
 {
+    TimerStart(STATE_DB_LOAD_PROGRAM_DB);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -216,10 +232,12 @@ void HashDB::loadProgramDB(const DatabaseMap::ProgramMap &input, const bool pers
 #ifdef LOG_TIME_STATISTICS_HASHDB
     tms.add("loadProgramDB", TimeDiff(t));
 #endif
+    TimerStopAndLog(STATE_DB_LOAD_PROGRAM_DB);
 }
 
-zkresult HashDB::flush (const string &batchUUID, const string &newStateRoot, const Persistence persistence, uint64_t &flushId, uint64_t &storedFlushId)
+zkresult HashDB::flush(const string &batchUUID, const string &newStateRoot, const Persistence persistence, uint64_t &flushId, uint64_t &storedFlushId)
 {
+    TimerStart(STATE_DB_FLUSH);
 #ifdef LOG_TIME_STATISTICS_HASHDB
     gettimeofday(&t, NULL);
 #endif
@@ -257,11 +275,12 @@ zkresult HashDB::flush (const string &batchUUID, const string &newStateRoot, con
     tms.print("HashDB");
     tms.clear();
 #endif
+    TimerStopAndLog(STATE_DB_FLUSH);
 
     return result;
 }
 
-void HashDB::semiFlush (const string &batchUUID, const string &newStateRoot, const Persistence persistence)
+void HashDB::semiFlush(const string &batchUUID, const string &newStateRoot, const Persistence persistence)
 {
     if (config.hashDB64)
     {
@@ -319,7 +338,7 @@ zkresult HashDB::getFlushStatus(uint64_t &storedFlushId, uint64_t &storingFlushI
     return ZKR_SUCCESS;
 }
 
-zkresult HashDB::getFlushData(uint64_t flushId, uint64_t &lastSentFlushId, unordered_map<string, string> (&nodes), unordered_map<string, string> (&program), string &nodesStateRoot)
+zkresult HashDB::getFlushData(uint64_t flushId, uint64_t &lastSentFlushId, unordered_map<string, string>(&nodes), unordered_map<string, string>(&program), string &nodesStateRoot)
 {
     if (!config.dbMultiWrite)
     {
